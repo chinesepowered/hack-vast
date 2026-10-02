@@ -279,6 +279,12 @@ def _detail(resp: httpx.Response) -> str:
 
 # --------------------------------------------------------------------------- client
 
+# Connection-level failures worth retrying: the team's backend is shared by every user on the team and
+# briefly refuses or drops connections under load. HTTP error responses are never retried here.
+TRANSIENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError, httpx.ReadError)
+RETRY_DELAYS = (0.6, 2.0)  # seconds before the 2nd and 3rd attempts
+
+
 class VSSClient:
     """Async client for /api/v1 on the team's VSS backend. Credentials never leave this object."""
 
@@ -323,8 +329,8 @@ class VSSClient:
             if self._token and self._token != stale:
                 return self._token
             try:
-                resp = await self._http().post(
-                    f"{self.base}/api/v1/auth/login",
+                resp = await self._send_retrying(
+                    "POST", f"{self.base}/api/v1/auth/login",
                     json={"username": self.username, "password": self._password})
             except httpx.HTTPError as exc:
                 self.ok, self.last_error = False, f"cannot reach VSS backend ({type(exc).__name__})"
@@ -357,8 +363,8 @@ class VSSClient:
         resp: httpx.Response | None = None
         for attempt in (0, 1):
             try:
-                resp = await self._http().request(method, f"{self.base}{path}",
-                                                  headers={"Authorization": f"Bearer {token}"}, **kwargs)
+                resp = await self._send_retrying(method, f"{self.base}{path}",
+                                                 headers={"Authorization": f"Bearer {token}"}, **kwargs)
             except httpx.TimeoutException:
                 raise VSSError(f"VSS backend timed out on {path}", 504) from None
             except httpx.HTTPError as exc:
@@ -369,6 +375,19 @@ class VSSClient:
             break
         assert resp is not None
         return resp
+
+    async def _send_retrying(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        """One request, retried with backoff on transient connection failures."""
+        for delay in (*RETRY_DELAYS, None):
+            try:
+                return await self._http().request(method, url, **kwargs)
+            except TRANSIENT as exc:
+                if delay is None:
+                    raise
+                log.info("VSS %s %s: %s, retrying in %.1fs", method, url.split("?")[0][-40:],
+                         type(exc).__name__, delay)
+                await asyncio.sleep(delay)
+        raise AssertionError("unreachable")
 
     async def search(self, query: str, top_k: int = 25, min_similarity: float = 0.3,
                      metadata_filters: dict | None = None,
@@ -446,6 +465,12 @@ class VSSClient:
                 headers={"Range": range_header} if range_header else None)
             try:
                 resp = await self._http().send(request, stream=True)
+            except TRANSIENT:
+                await asyncio.sleep(RETRY_DELAYS[0])  # one quick retry for a dropped connection
+                try:
+                    resp = await self._http().send(request, stream=True)
+                except httpx.HTTPError as exc:
+                    raise VSSError(f"clip stream failed ({type(exc).__name__})", 502) from None
             except httpx.TimeoutException:
                 raise VSSError("clip stream timed out", 504) from None
             except httpx.HTTPError as exc:
