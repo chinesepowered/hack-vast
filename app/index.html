@@ -434,7 +434,7 @@ function renderSimilarBanner() {
     <div class="mt-0.5 text-xs text-ink2">${esc(prettyLoc(s.location || ''))} · ${esc(s.camera_id || '')} · ${esc(span(s))}</div></div>
     ${state.prevView ? '<button type="button" class="btn-ghost" id="backBtn">← Back to results</button>' : ''}</div>`;
   const back = $('#backBtn');
-  if (back) back.onclick = () => { const prev = state.prevView; state.prevView = null; state.runSeq++; showView(prev); };
+  if (back) back.onclick = () => { const prev = state.prevView; state.prevView = null; state.runSeq++; showView(prev); autoVerify(prev, state.runSeq); };
 }
 
 function introHTML() {
@@ -462,7 +462,7 @@ function verdictOf(source, scenario) {
 function badgeHTML(vd, pending, eligible) {
   const base = 'inline-flex items-center gap-1.5 rounded-full bg-black/75 px-2 py-1 text-xs font-semibold text-ink ring-1 ring-white/10 backdrop-blur';
   const dot = (bg, icon) => `<span class="flex h-4 w-4 items-center justify-center rounded-full ${bg}">${icon}</span>`;
-  if (pending) return `<span class="${base}">${ICON.spinner}Watching…</span>`;
+  if (pending) return `<span class="${base}">${ICON.spinner}${verifierName().endsWith('Cosmos') ? 'Watching…' : 'Verifying…'}</span>`;
   if (!vd) return `<span class="${base} font-medium text-ink2">${eligible ? 'Queued' : 'Not verified'}</span>`;
   const conf = vd.confidence != null ? ` <span class="font-normal text-ink2 tabular">${fmt2(vd.confidence)}</span>` : '';
   if (vd.match === true) return `<span class="${base}">${dot('bg-good', ICON.check)}Match${conf}</span>`;
@@ -618,6 +618,7 @@ async function verifySources(view, sources, runId) {
   let next = 0;
   const worker = async () => {
     while (next < batches.length) {
+      if (state.view !== view) return;  // a new search replaced these results: stop spending GPU time
       const batch = batches[next++];
       batch.forEach((s) => state.pending.add(vkey(view.scenario, s)));
       refreshCards(view, batch);

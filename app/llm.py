@@ -24,10 +24,17 @@ DEFAULT_INFERENCE_URL = "https://api.inference.wandb.ai/v1"
 # W&B Inference sits behind Cloudflare, which rejects some default client User-Agents.
 USER_AGENT = "edge-case-miner/1.0"
 
-try:  # optional tracing
-    import weave as _weave
-except Exception:  # noqa: BLE001 - any import problem just disables tracing
-    _weave = None
+# The weave/wandb SDKs ship Sentry error telemetry; keep it off unless explicitly enabled.
+os.environ.setdefault("WANDB_ERROR_REPORTING", "false")
+# MOCK=1 promises no network calls at all, so don't even import the tracing SDK then.
+_OFFLINE = os.environ.get("MOCK", "").strip().lower() in ("1", "true", "yes", "on")
+
+_weave = None
+if not _OFFLINE:
+    try:  # optional tracing
+        import weave as _weave
+    except Exception:  # noqa: BLE001 - any import problem just disables tracing
+        _weave = None
 
 
 def _identity(fn: Callable) -> Callable:

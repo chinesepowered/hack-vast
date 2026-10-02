@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import tempfile
 import time
 from pathlib import Path
@@ -33,10 +34,13 @@ RUBRIC = (
     "You are verifying training data for autonomous-vehicle and robotics engineers.\n"
     'Watch this ~5 second video clip. Does it clearly show the scenario: "{scenario}"?\n'
     "Judge only what is visible in the clip itself. If the key actors or the key action are missing, "
-    "or you are unsure, answer false.\n"
+    "or you are unsure, answer false. Keep any reasoning brief.\n"
     'Reply ONLY with JSON and no other text: {{"match": true|false, "confidence": 0..1, '
     '"why": "<one sentence citing what is visible>"}}'
 )
+# Token budgets: a short answer first; if a reasoning model runs out of tokens while still thinking
+# (finish_reason "length", no verdict yet), retry once with room to finish.
+TOKEN_BUDGETS = (400, 1500)
 
 
 class CosmosError(Exception):
@@ -118,10 +122,9 @@ class CosmosClient:
         model = await self.model()
         if not model:
             raise CosmosError(self.last_error or "model unknown")
-        payload = {
+        payload: dict[str, Any] = {
             "model": model,
             "temperature": 0,
-            "max_tokens": 400,
             "messages": [{
                 "role": "user",
                 "content": [
@@ -132,21 +135,30 @@ class CosmosClient:
             }],
         }
         t0 = time.perf_counter()
-        try:
-            resp = await self._http().post(f"{self.base}/v1/chat/completions", json=payload,
-                                           headers=self._headers())
-        except httpx.TimeoutException:
-            raise CosmosError("Cosmos3-Reason timed out") from None
-        except httpx.HTTPError as exc:
-            raise CosmosError(f"Cosmos3-Reason request failed ({type(exc).__name__})") from None
-        if resp.status_code != 200:
-            raise CosmosError(f"Cosmos3-Reason HTTP {resp.status_code}: {redact(resp.text)[:160]}")
-        try:
-            message = resp.json()["choices"][0]["message"]
-        except Exception:  # noqa: BLE001
-            raise CosmosError("Cosmos3-Reason returned an unexpected response shape") from None
-        text = message.get("content") or message.get("reasoning_content") or ""
-        verdict = llm.parse_verdict(text)
+        verdict: dict = {"match": None, "confidence": None, "why": "empty reply"}
+        for budget in TOKEN_BUDGETS:
+            payload["max_tokens"] = budget
+            try:
+                resp = await self._http().post(f"{self.base}/v1/chat/completions", json=payload,
+                                               headers=self._headers())
+            except httpx.TimeoutException:
+                raise CosmosError("Cosmos3-Reason timed out") from None
+            except httpx.HTTPError as exc:
+                raise CosmosError(f"Cosmos3-Reason request failed ({type(exc).__name__})") from None
+            if resp.status_code != 200:
+                raise CosmosError(f"Cosmos3-Reason HTTP {resp.status_code}: {redact(resp.text)[:160]}")
+            try:
+                choice = resp.json()["choices"][0]
+                message = choice["message"]
+            except Exception:  # noqa: BLE001
+                raise CosmosError("Cosmos3-Reason returned an unexpected response shape") from None
+            text = message.get("content") or ""
+            truncated = choice.get("finish_reason") == "length"
+            if not text.strip() and not truncated:  # some servers put the whole answer in reasoning_content
+                text = message.get("reasoning_content") or ""
+            verdict = llm.parse_verdict(text)
+            if verdict["match"] is not None or not truncated:
+                break
         verdict.update(method="cosmos-video", model=model, ms=int((time.perf_counter() - t0) * 1000))
         return verdict
 
@@ -157,7 +169,7 @@ _FFMPEG: Any = False  # False = not looked up yet; None = unavailable
 
 
 def ffmpeg_exe() -> str | None:
-    """Path to the ffmpeg binary bundled with imageio-ffmpeg, if that optional package is installed."""
+    """ffmpeg bundled with imageio-ffmpeg (optional package), else a system ffmpeg, else None."""
     global _FFMPEG
     if _FFMPEG is False:
         try:
@@ -165,7 +177,7 @@ def ffmpeg_exe() -> str | None:
 
             _FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
         except Exception:  # noqa: BLE001
-            _FFMPEG = None
+            _FFMPEG = shutil.which("ffmpeg")
     return _FFMPEG
 
 

@@ -112,8 +112,37 @@ def test_query_parsing_and_model_pick():
     assert llm.fallback_queries("pedestrian crossing at night")[0] == "pedestrian crossing at night"
 
 
+def test_cosmos_retries_truncated_reasoning():
+    import asyncio
+
+    import httpx
+
+    import cosmos
+
+    budgets = []
+
+    def handler(request):
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"data": [{"id": "nvidia/cosmos3-nano-reasoner"}]})
+        body = json.loads(request.content)
+        budgets.append(body["max_tokens"])
+        assert body["messages"][0]["content"][1]["video_url"]["url"].startswith("data:video/mp4;base64,")
+        if len(budgets) == 1:  # a reasoning model that ran out of tokens mid-thought
+            return httpx.Response(200, json={"choices": [{"finish_reason": "length",
+                                                          "message": {"content": "<think>The cyclist is"}}]})
+        return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {
+            "content": '<think>ok</think>{"match": true, "confidence": 0.7, "why": "A cyclist rides beside cars."}'}}]})
+
+    client = cosmos.CosmosClient("http://cosmos.test:8001/v1", "t", "")
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    verdict = asyncio.run(client.judge_video("cyclist riding next to moving cars", b"\x00fake-mp4"))
+    assert verdict["match"] is True and verdict["method"] == "cosmos-video"
+    assert verdict["model"] == "nvidia/cosmos3-nano-reasoner" and budgets == list(cosmos.TOKEN_BUDGETS)
+
+
 def test_redact():
-    text = "GET /stream?source=s3%3A%2F%2Fb&token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ0ZWFtIn0.abcdefgh Bearer abc.def"
+    fake_jwt = ".".join(["eyJ" + "x" * 12, "eyJ" + "y" * 12, "z" * 10])  # built at runtime: no token literal
+    text = f"GET /stream?source=s3%3A%2F%2Fb&token={fake_jwt} Bearer abc.def; also bare {fake_jwt}"
     out = vss.redact(text)
     assert "eyJ" not in out and "abc.def" not in out and "token=***" in out
 

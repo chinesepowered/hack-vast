@@ -179,7 +179,7 @@ def normalize_hit(row: Any) -> dict | None:
     caption = _first(row, CAPTION_KEYS)
     counts = _counts(row.get("object_counts"))
     return {
-        "source": source.strip(),
+        "source": source,
         "original_video": str(original) if original is not None else None,
         "filename": str(row["filename"]) if row.get("filename") else None,
         "camera_id": _meta(row, "camera_id"),

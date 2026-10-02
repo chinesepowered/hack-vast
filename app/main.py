@@ -382,7 +382,7 @@ def manifest_entry(item: Any, default_scenario: str) -> dict | None:
         item = {"source": item}
     if not isinstance(item, dict) or not str(item.get("source") or "").strip():
         return None
-    source = str(item["source"]).strip()
+    source = str(item["source"])
     known = REGISTRY.get(source, {})
     label = _norm_text(item.get("scenario") or item.get("label") or default_scenario)
     cached = VERDICTS.get(source, label) if label else None
@@ -633,7 +633,7 @@ async def run_warm() -> dict:
                 picks = [c["source"] for c in result["candidates"][:MAX_VERIFY]]
             except Exception as exc:  # noqa: BLE001 - keep warming the other scenarios
                 WARM["errors"].append(f"{entry['label']}: {err_text(exc)}")
-            work.append((entry, _dedupe(picks + coverage_picks(base, entry["id"]))))
+            work.append((entry, list(dict.fromkeys(picks + coverage_picks(base, entry["id"])))))
             WARM["done"] += 1
         WARM.update(phase="verify", total=WARM["done"] + sum(len(p) for _, p in work),
                     detail="Cosmos3-Reason is watching the top clips")
@@ -800,7 +800,7 @@ async def api_mine(req: MineRequest) -> dict:
 
 @app.post("/api/verify")
 async def api_verify(req: VerifyRequest) -> dict:
-    sources = _dedupe([s.strip() for s in req.sources if s and s.strip()])
+    sources = list(dict.fromkeys(s for s in req.sources if s and s.strip()))  # exact: S3 keys are case-sensitive
     if len(sources) > 8:
         raise AppError(400, "At most 8 sources per /api/verify call.")
     scenario = _norm_text(req.scenario)
@@ -813,7 +813,7 @@ async def api_similar(req: SimilarRequest) -> dict:
     """More like this: search with the seed clip's caption, excluding the seed."""
     require_vss()
     t0 = time.perf_counter()
-    seed = await lookup(req.source.strip())
+    seed = await lookup(req.source)
     caption = (seed or {}).get("caption") or ""
     if not caption:
         raise AppError(404, "No caption known for that clip - run a search first.")
@@ -828,13 +828,14 @@ async def api_similar(req: SimilarRequest) -> dict:
     query = query[:300]
     location = (req.location or "").strip() or None
     min_sim, notes = req.min_similarity, []
-    for _attempt in (0, 1):
+    for attempt in (0, 1):
         hits = await search(query, min(100, req.top_k + 1), min_sim, location, req.hybrid_text_weight)
         candidates = [{**h, "matched_queries": [query]} for h in hits if h["source"] != seed["source"]]
-        if candidates or min_sim <= 0.08:
+        if candidates or attempt == 1 or min_sim <= 0.08:
             break
-        notes.append(f"No similar clips at min similarity {min_sim:.2f}; relaxed to {max(0.05, min_sim / 2):.2f}.")
-        min_sim = round(max(0.05, min_sim / 2), 2)
+        relaxed = round(max(0.05, min_sim / 2), 2)
+        notes.append(f"No similar clips at min similarity {min_sim:.2f}; relaxed to {relaxed:.2f}.")
+        min_sim = relaxed
     return {"scenario": _norm_text(req.scenario), "seed": seed["source"], "query": query, "queries": [query],
             "candidates": [with_stream(c) for c in candidates[: req.top_k]], "notes": notes, "errors": [],
             "min_similarity": min_sim, "timings": {"search_ms": _ms(t0), "total_ms": _ms(t0)}}
@@ -872,8 +873,10 @@ async def api_export(req: ExportRequest) -> dict:
 
 @app.get("/api/export/{export_id}.json")
 async def api_export_file(export_id: str) -> FileResponse:
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,90}", export_id):
+        raise AppError(404, "Export not found.")
     path = EXPORT_DIR / f"{export_id}.json"
-    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,90}", export_id) or not path.is_file():
+    if not path.is_file():
         raise AppError(404, "Export not found.")
     return FileResponse(path, media_type="application/json", filename=f"{export_id}.json")
 

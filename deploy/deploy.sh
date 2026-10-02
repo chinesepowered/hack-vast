@@ -57,6 +57,25 @@ APP_HOST="${APP_HOST#https://}"
 APP_HOST="${APP_HOST%%/*}"
 [[ -n "$APP_HOST" ]] || die "could not derive the team host from INGRESS_URL"
 
+# --- path: /app, unless another app in this (possibly shared) namespace already serves /app on this host
+if [[ -z "${APP_PATH:-}" ]]; then
+  APP_PATH=/app
+  taken="$("$KUBECTL" -n "$NS" get ingress -o json 2>/dev/null | python3 -c '
+import json, sys
+host, mine = sys.argv[1], sys.argv[2]
+for item in json.load(sys.stdin).get("items", []):
+    name = item["metadata"]["name"]
+    for rule in item.get("spec", {}).get("rules", []):
+        for p in rule.get("http", {}).get("paths", []):
+            if name != mine and rule.get("host") == host and (p.get("path") or "").startswith("/app"):
+                print(name)
+' "$APP_HOST" "$APP_NAME" | sort -u | tr '\n' ' ' || true)"
+  if [[ -n "$taken" ]]; then
+    APP_PATH=/edge-case-miner
+    echo "WARN: /app on $APP_HOST is already taken by: ${taken}— using $APP_PATH instead" >&2
+  fi
+fi
+
 # --- the ConfigMap holds app/ (flat: --from-file does not recurse) and must stay under ~1 MiB
 APP_BYTES="$(find "$APP_DIR" -maxdepth 1 -type f -printf '%s\n' | awk '{s += $1} END {print s + 0}')"
 (( APP_BYTES < 950000 )) || die "app/ is ${APP_BYTES} bytes; a ConfigMap must stay under 1 MiB"
@@ -76,16 +95,23 @@ done
 if (( ${#empty[@]} )); then
   echo "WARN: empty in the app Secret: ${empty[*]}" >&2
 fi
-"$KUBECTL" -n "$NS" create secret generic "${APP_NAME}-env" \
-  --from-literal=VSS_URL="${INGRESS_URL:-}" \
-  --from-literal=VSS_USERNAME="${USERNAME:-}" \
-  --from-literal=VSS_PASSWORD="${PASSWORD:-}" \
-  --from-literal=GPU_BEARER_TOKEN="${GPU_BEARER_TOKEN:-}" \
-  --from-literal=COSMOS3_REASON_URL="${COSMOS3_REASON_URL:-}" \
-  --from-literal=COSMOS3_REASON_MODEL="${COSMOS3_REASON_MODEL:-}" \
-  --from-literal=WANDB_API_KEY="${WANDB_API_KEY:-}" \
-  --from-literal=WANDB_TEAM="${WANDB_TEAM:-}" \
-  --from-literal=WANDB_PROJECT="${WANDB_PROJECT:-}" \
+# Values go through a private temp file, not --from-literal: on a shared VM, command lines are
+# visible to every user via ps.
+ENV_FILE="$(mktemp)"
+chmod 600 "$ENV_FILE"
+trap 'rm -f "$ENV_FILE"' EXIT
+{
+  printf 'VSS_URL=%s\n' "${INGRESS_URL:-}"
+  printf 'VSS_USERNAME=%s\n' "${USERNAME:-}"
+  printf 'VSS_PASSWORD=%s\n' "${PASSWORD:-}"
+  printf 'GPU_BEARER_TOKEN=%s\n' "${GPU_BEARER_TOKEN:-}"
+  printf 'COSMOS3_REASON_URL=%s\n' "${COSMOS3_REASON_URL:-}"
+  printf 'COSMOS3_REASON_MODEL=%s\n' "${COSMOS3_REASON_MODEL:-}"
+  printf 'WANDB_API_KEY=%s\n' "${WANDB_API_KEY:-}"
+  printf 'WANDB_TEAM=%s\n' "${WANDB_TEAM:-}"
+  printf 'WANDB_PROJECT=%s\n' "${WANDB_PROJECT:-}"
+} > "$ENV_FILE"
+"$KUBECTL" -n "$NS" create secret generic "${APP_NAME}-env" --from-env-file="$ENV_FILE" \
   --dry-run=client -o yaml \
   | "$KUBECTL" -n "$NS" apply --server-side --force-conflicts -f -
 
@@ -180,7 +206,7 @@ spec:
   - host: ${APP_HOST}
     http:
       paths:
-      - path: /app(/|\$)(.*)
+      - path: ${APP_PATH}(/|\$)(.*)
         pathType: ImplementationSpecific
         backend:
           service:
@@ -193,7 +219,7 @@ EOF
 "$KUBECTL" -n "$NS" rollout restart deploy/"$APP_NAME"
 "$KUBECTL" -n "$NS" rollout status deploy/"$APP_NAME" --timeout=600s
 
-APP_URL="http://${APP_HOST}/app"
+APP_URL="http://${APP_HOST}${APP_PATH}"
 echo "$APP_URL" > "$REPO_ROOT/.app-url" 2>/dev/null || true
 echo
 echo "== Edge-Case Miner is live: $APP_URL"
