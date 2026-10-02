@@ -89,7 +89,9 @@ def load_config():
 
 def http(method, url, headers=None, body=None, timeout=60, raw=False):
     data = None
-    headers = dict(headers or {})
+    # api.inference.wandb.ai sits behind Cloudflare, which rejects urllib's default
+    # "Python-urllib" User-Agent with error 1010.
+    headers = {"User-Agent": "edge-case-miner-preflight/1.0", **(headers or {})}
     if body is not None:
         data = json.dumps(body).encode()
         headers.setdefault("Content-Type", "application/json")
@@ -266,15 +268,18 @@ def main():
             out(f"   ❌ chat with {model} HTTP {status}: {summarize(data, 200)}")
 
     def kube():
-        kubectl = shutil.which("kubectl")
-        if not kubectl:
-            out("   ❌ kubectl not found")
-            return
-        kubeconfig = "/config/kubeconfig" if os.path.exists("/config/kubeconfig") else \
-            next(iter(sorted(glob.glob("/config/*-k8s.yaml"))), "")
+        out(f"   /config contains: {sorted(os.listdir('/config')) if os.path.isdir('/config') else 'no /config'}")
+        kubeconfig = os.environ.get("KUBECONFIG") or ""
+        if not os.path.isfile(kubeconfig):
+            kubeconfig = "/config/kubeconfig" if os.path.exists("/config/kubeconfig") else \
+                next(iter(sorted(glob.glob("/config/*-k8s.yaml"))), "")
+        kubectl = os.environ.get("KUBECTL") or shutil.which("kubectl")
         ns = cfg.get("USERNAME", "")
-        env = dict(os.environ, KUBECONFIG=kubeconfig) if kubeconfig else dict(os.environ)
-        out(f"   kubeconfig: {kubeconfig or 'default'}  namespace: {ns}")
+        out(f"   kubectl: {kubectl or 'not found'}  kubeconfig: {kubeconfig or 'none'}  namespace: {ns}")
+        if not kubectl or not kubeconfig:
+            out("   ❌ can't deploy to Kubernetes from this VM — use the local fallback (go.sh local)")
+            return
+        env = dict(os.environ, KUBECONFIG=kubeconfig)
         can = subprocess.run([kubectl, "auth", "can-i", "create", "deployments", "-n", ns],
                              capture_output=True, text=True, env=env, timeout=30)
         out(f"   can create deployments: {(can.stdout or can.stderr).strip()[:120]}")
@@ -306,9 +311,19 @@ def main():
             step("3. Filter values", locations)
             step(f'4. Search "{TEST_QUERY}"', search)
             step("5. Download one clip", download)
+    def python_env():
+        import platform
+        pip = subprocess.run(["python3", "-m", "pip", "--version"], capture_output=True, text=True)
+        have = []
+        for mod in ("fastapi", "uvicorn", "httpx"):
+            have.append(f"{mod}={'yes' if subprocess.run(['python3', '-c', f'import {mod}'], capture_output=True).returncode == 0 else 'no'}")
+        out(f"   python {platform.python_version()}  pip: {(pip.stdout or pip.stderr).strip()[:60] or 'missing'}  {' '.join(have)}")
+        out(f"   ffmpeg: {shutil.which('ffmpeg') or 'not found'}")
+
     step("6. Cosmos3-Reason (direct clip verification)", cosmos)
     step("7. W&B Inference (query expansion LLM)", wandb)
     step("8. Kubernetes", kube)
+    step("9. Python on this VM (for the local fallback)", python_env)
 
     out("\n>>> Copy everything from 'EDGE-CASE MINER PREFLIGHT' to here and send it to Claude.")
     with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "preflight-report.txt"), "w") as fh:

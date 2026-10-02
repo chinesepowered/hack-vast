@@ -20,3 +20,6 @@ ecm-cache/
 .DS_Store
 .idea/
 .vscode/
+
+# user-local tools fetched by vm/env.sh
+.bin/
