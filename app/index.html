@@ -561,7 +561,7 @@ function renderResults() {
       card.addEventListener('mouseenter', () => { video.play().catch(() => {}); });
       card.addEventListener('mouseleave', () => { if (!video.paused) video.pause(); });
       video.addEventListener('error', () => {
-        video.closest('.video-shell').innerHTML = '<div class="flex h-full flex-col items-center justify-center gap-1 text-xs text-ink2">Playback unavailable<span class="text-[11px] text-muted">token expired or clip missing; re-run the search</span></div>';
+        video.closest('.video-shell').innerHTML = '<div class="flex h-full flex-col items-center justify-center gap-1 px-4 text-center text-xs text-ink2">Playback unavailable<span class="text-[11px] text-muted">this browser can\'t decode the clip, or the token expired (re-run the search)</span></div>';
       });
     }
     $('.similar', card).onclick = () => moreLikeThis(i);
@@ -577,11 +577,10 @@ function renderResults() {
 // Before / after: swap the player to the neighbouring 5 s segment of the same parent video.
 function showContext(card, c, side) {
   const seg = side === 'hit' ? c : (c.context || {})[side];
-  const video = $('video', card);
-  if (!seg || !seg.stream_url || !video) return;
+  if (!seg) return;
   for (const b of $$('.ctx [data-ctx]', card)) b.setAttribute('aria-pressed', String(b.dataset.ctx === side));
-  video.src = seg.stream_url;
-  video.play().catch(() => {});
+  const video = $('video', card);  // may be gone if playback failed; the caption still switches
+  if (video && seg.stream_url) { video.src = seg.stream_url; video.play().catch(() => {}); }
   const prefix = side === 'prev' ? `Before (${span(seg)}): ` : side === 'next' ? `After (${span(seg)}): ` : '';
   $('.caption', card).textContent = prefix + (seg.caption || 'No caption');
 }
