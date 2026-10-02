@@ -7,7 +7,8 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%233987e5' d='M6 3h12l4 6-10 12L2 9z'/%3E%3C/svg%3E">
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
-  tailwind.config = {
+  // Guarded: if the CDN is unreachable the page still works (unstyled) instead of throwing.
+  if (window.tailwind) tailwind.config = {
     theme: {
       extend: {
         colors: {
@@ -416,7 +417,7 @@ function renderQueries() {
   $('#queriesMeta').textContent = `${model} · search ${secs(t.search_ms)}${t.expand_ms != null ? ` · expand ${secs(t.expand_ms)}` : ''}`;
   const counts = new Map();
   for (const c of v.candidates) for (const q of c.matched_queries || []) counts.set(q, (counts.get(q) || 0) + 1);
-  $('#queries').innerHTML = (v.queries || []).map((q, i) => `<span class="chip ${i === 0 && v.kind === 'mine' ? 'border-accent/50 text-ink' : ''}" title="${esc(q)}"><span class="max-w-[22rem] truncate">${esc(q)}</span><span class="rounded-full bg-plane px-1.5 text-[10px] text-muted tabular">${counts.get(q) || 0}</span></span>`).join('');
+  $('#queries').innerHTML = (v.queries || []).map((q, i) => `<span class="chip max-w-full ${i === 0 && v.kind === 'mine' ? 'border-accent/50 text-ink' : ''}" title="${esc(q)}"><span class="min-w-0 truncate sm:max-w-[22rem]">${esc(q)}</span><span class="shrink-0 rounded-full bg-plane px-1.5 text-[10px] text-muted tabular">${counts.get(q) || 0}</span></span>`).join('');
   const notes = [...(v.notes || []), ...(v.errors || []).map((e) => `Query “${e.query}” failed: ${e.error}`)];
   $('#notes').innerHTML = notes.map((n) => `<div class="text-xs text-warn">${esc(n)}</div>`).join('');
 }
@@ -528,16 +529,16 @@ function cardHTML(c, i) {
         <span class="tag">${ICON.pin}${esc(prettyLoc(c.location || '(unknown)'))}</span>
         <span class="tag">${ICON.cam}${esc(c.camera_id || 'unknown camera')}</span>
         ${span(c) ? `<span class="tag tabular">${ICON.clock}${esc(span(c))}</span>` : ''}${objs}
+        ${matched > 1 ? `<span class="tag" title="${esc((c.matched_queries || []).join(' | '))}">found by ${matched} queries</span>` : ''}
       </div>
       ${contextHTML(c)}
       <p class="caption clamp-3 text-[13px] leading-snug text-ink2">${esc(c.caption || 'No caption')}</p>
       ${(c.caption || '').length > 150 ? '<button type="button" class="more self-start text-[11px] font-medium text-accent hover:underline">Show more</button>' : ''}
       <div class="why"></div>
-      <div class="mt-auto flex flex-wrap items-center gap-2 pt-1">
-        <button type="button" class="similar btn-ghost">More like this</button>
-        <button type="button" class="add btn-ghost ${inDs ? '!border-good/60 !text-ink' : ''}">${inDs ? '✓ In dataset' : '+ Dataset'}</button>
-        <span class="ml-auto text-[11px] text-muted" title="${esc((c.matched_queries || []).join(' | '))}">${matched > 1 ? `${matched} queries` : ''}</span>
-        <button type="button" class="raw rounded px-1.5 py-0.5 font-mono text-[11px] text-muted hover:bg-raised hover:text-ink" title="Show raw backend row in the debug panel">{ }</button>
+      <div class="mt-auto flex items-center gap-2 pt-1">
+        <button type="button" class="similar btn-ghost whitespace-nowrap">More like this</button>
+        <button type="button" class="add btn-ghost whitespace-nowrap ${inDs ? '!border-good/60 !text-ink' : ''}">${inDs ? '✓ In dataset' : '+ Dataset'}</button>
+        <button type="button" class="raw ml-auto shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] text-muted hover:bg-raised hover:text-ink" title="Show the raw backend row in the debug panel" aria-label="Show raw backend row">{ }</button>
       </div>
     </div></article>`;
 }
@@ -856,7 +857,8 @@ async function loadCoverage(refresh = false) {
 }
 
 function covCell(cell, label, loc, max) {
-  const shade = cell.hits ? 0.12 + 0.58 * Math.sqrt(cell.hits / max) : 0;
+  // Shade = strong search hits; a covered cell (verified matches, even with few strong hits) never looks empty.
+  const shade = Math.max(cell.hits ? 0.12 + 0.58 * Math.sqrt(cell.hits / max) : 0, cell.verified_matches ? 0.14 : 0);
   const style = cell.gap ? 'background:rgba(208,59,59,.13);box-shadow:inset 0 0 0 1px rgba(208,59,59,.6)' : `background:rgba(37,106,191,${shade.toFixed(3)})`;
   const tip = `${label} · ${loc ? prettyLoc(loc) : 'all cameras'}: ${cell.hits} strong search hits; ${cell.verified_total ? `${cell.verified_matches} of ${cell.verified_total} verified clips match` : 'nothing verified yet'}${cell.gap ? ' · GAP' : ''}. Click to mine.`;
   const verified = cell.verified_total
