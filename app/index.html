@@ -1,0 +1,1006 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Edge-Case Miner</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%233987e5' d='M6 3h12l4 6-10 12L2 9z'/%3E%3C/svg%3E">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  // Guarded: if the CDN is unreachable the page still works (unstyled) instead of throwing.
+  if (window.tailwind) tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          plane: '#0d0d0d', surface: '#1a1a19', raised: '#232321', hair: '#2c2c2a', axis: '#383835',
+          ink: '#ffffff', ink2: '#c3c2b7', muted: '#898781',
+          accent: { DEFAULT: '#3987e5', strong: '#256abf', soft: '#1c5cab' },
+          good: '#0ca30c', warn: '#fab219', serious: '#ec835a', crit: '#d03b3b',
+        },
+        fontFamily: { sans: ['system-ui', '-apple-system', '"Segoe UI"', 'Roboto', 'sans-serif'] },
+      },
+    },
+  };
+</script>
+<style>
+  :root { color-scheme: dark; }
+  html, body { background: #0d0d0d; color: #ffffff; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .tabular { font-variant-numeric: tabular-nums; }
+  .spin { animation: ecm-spin .9s linear infinite; }
+  @keyframes ecm-spin { to { transform: rotate(360deg); } }
+  .stripes { background-image: repeating-linear-gradient(-45deg, rgba(250,178,25,.20) 0 14px, rgba(250,178,25,.08) 14px 28px); }
+  .video-shell { background: radial-gradient(120% 90% at 30% 20%, #1f2a3a 0%, #121417 55%, #0b0c0d 100%); }
+  .clamp-3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  details > summary { list-style: none; }
+  details > summary::-webkit-details-marker { display: none; }
+  input[type=range] { accent-color: #3987e5; }
+  .cov-table th, .cov-table td { border-color: #2c2c2a; }
+</style>
+<style type="text/tailwindcss">
+  @layer components {
+    .btn-primary { @apply inline-flex items-center justify-center gap-1.5 rounded-lg bg-accent-strong px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#2a78d6] disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent; }
+    .btn-ghost { @apply inline-flex items-center justify-center gap-1.5 rounded-lg border border-hair bg-raised/70 px-3 py-1.5 text-xs font-medium text-ink2 transition hover:border-axis hover:text-ink disabled:cursor-not-allowed disabled:opacity-50; }
+    .chip { @apply inline-flex items-center gap-1.5 rounded-full border border-hair bg-raised/70 px-2.5 py-1 text-xs text-ink2; }
+    .tag { @apply inline-flex max-w-full items-center gap-1 truncate rounded-md bg-raised px-1.5 py-0.5 text-[11px] text-ink2; }
+    .tab { @apply relative px-3 py-2.5 text-sm font-medium text-muted transition hover:text-ink2; }
+    .tab[aria-selected="true"] { @apply text-ink; }
+    .tab[aria-selected="true"]::after { content: ""; @apply absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-accent; }
+    .panel { @apply rounded-2xl border border-hair bg-surface; }
+    .tile { @apply rounded-xl border border-hair bg-surface px-4 py-3; }
+    .label { @apply text-[11px] font-semibold uppercase tracking-wider text-muted; }
+    .field { @apply w-full rounded-lg border border-hair bg-plane px-3 py-2 text-sm text-ink placeholder:text-muted focus:border-accent focus:outline-none; }
+    .seg { @apply rounded-md px-2.5 py-1 text-xs font-medium text-muted transition hover:text-ink2; }
+    .seg[aria-pressed="true"] { @apply bg-raised text-ink ring-1 ring-axis; }
+  }
+</style>
+</head>
+<body class="min-h-screen bg-plane pb-16 text-ink antialiased">
+
+<div id="mockBanner" class="stripes hidden border-b border-warn/40 px-4 py-2 text-center text-sm font-semibold tracking-wide text-ink">
+  <span class="mr-2 inline-flex h-5 items-center rounded bg-warn px-1.5 text-[11px] font-bold text-black">MOCK DATA</span>
+  Offline demo corpus: invented captions, no real footage, no network calls. Unset <code class="font-mono">MOCK</code> to mine the live VAST archive.
+</div>
+
+<header class="sticky top-0 z-30 border-b border-hair bg-plane/90 backdrop-blur">
+  <div class="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-3 px-4 pt-3">
+    <div class="mr-auto flex min-w-0 items-center gap-3">
+      <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent-strong/20 ring-1 ring-accent/40">
+        <svg viewBox="0 0 24 24" class="h-6 w-6" fill="none" stroke="#3987e5" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h12l4 6-10 12L2 9z"/><path d="M2 9h20M12 21 8 9l4-6 4 6-4 12"/></svg>
+      </div>
+      <div class="min-w-0">
+        <h1 class="text-lg font-semibold leading-tight tracking-tight">Edge-Case Miner</h1>
+        <p class="truncate text-xs text-ink2">Type a rare scenario. Search every camera. Let Cosmos3-Reason watch each clip. Ship a verified training set.</p>
+      </div>
+    </div>
+    <div id="pills" class="flex flex-wrap items-center gap-2"><span class="chip"><span class="h-2 w-2 rounded-full bg-muted"></span>Connecting…</span></div>
+  </div>
+  <nav class="mx-auto mt-1 flex max-w-7xl gap-1 px-4" role="tablist" aria-label="Sections">
+    <button class="tab" role="tab" data-tab="mine" aria-selected="true">Mine</button>
+    <button class="tab" role="tab" data-tab="coverage" aria-selected="false">Coverage</button>
+    <button class="tab" role="tab" data-tab="dataset" aria-selected="false">Dataset <span id="dsCount" class="ml-1 rounded-full bg-raised px-1.5 py-0.5 text-[11px] text-ink2 tabular">0</span></button>
+  </nav>
+</header>
+
+<main class="mx-auto max-w-7xl px-4 py-6">
+
+  <!-- ============================== MINE ============================== -->
+  <section id="tab-mine" class="space-y-5" role="tabpanel">
+    <form id="mineForm" class="panel p-4 sm:p-5" autocomplete="off">
+      <label for="scenario" class="label">Edge case to mine</label>
+      <div class="mt-2 flex flex-col gap-3 sm:flex-row">
+        <div class="relative flex-1">
+          <svg class="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="scenario" type="text" maxlength="300" class="w-full rounded-xl border border-hair bg-plane py-3 pl-11 pr-4 text-base text-ink placeholder:text-muted focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/30" placeholder="e.g. pedestrian stepping into the road in front of a moving vehicle">
+        </div>
+        <button id="mineBtn" type="submit" class="btn-primary px-6 py-3 text-base">
+          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3h12l4 6-10 12L2 9z"/></svg>Mine clips
+        </button>
+      </div>
+      <div id="chips" class="mt-3 flex flex-wrap gap-2"></div>
+      <details id="advanced" class="mt-4 rounded-xl border border-hair bg-plane/40">
+        <summary class="flex cursor-pointer select-none items-center gap-2 px-3 py-2 text-xs font-medium text-ink2 hover:text-ink">
+          <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+          Advanced search options
+        </summary>
+        <div class="grid gap-5 px-3 pb-4 pt-2 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <div class="flex items-center justify-between"><label for="minSim" class="label">Min similarity</label><span id="minSimVal" class="text-xs text-ink2 tabular">0.12</span></div>
+            <input id="minSim" type="range" min="0.05" max="0.5" step="0.01" value="0.12" class="mt-2 w-full">
+            <div class="text-[11px] text-muted">hybrid scores run low (~0.3 is a strong hit); verification filters</div>
+          </div>
+          <div>
+            <label for="topK" class="label">Candidates (top_k)</label>
+            <input id="topK" type="number" min="5" max="100" value="30" class="field mt-1.5 tabular">
+          </div>
+          <div>
+            <div class="flex items-center justify-between">
+              <span class="label">Caption ↔ visual</span>
+              <label class="flex items-center gap-1.5 text-[11px] text-ink2"><input id="weightDefault" type="checkbox" checked class="accent-[#3987e5]"> backend default</label>
+            </div>
+            <input id="weight" type="range" min="0" max="100" step="5" value="40" disabled class="mt-2 w-full disabled:opacity-40" aria-label="Caption versus visual weight">
+            <div class="flex justify-between text-[11px] text-muted"><span>caption text</span><span id="weightVal" class="text-ink2">default</span><span>visual</span></div>
+          </div>
+          <div>
+            <label for="location" class="label">Location</label>
+            <select id="location" class="field mt-1.5"><option value="">All locations</option></select>
+            <label class="mt-2 flex items-center gap-1.5 text-[11px] text-ink2"><input id="fresh" type="checkbox" class="accent-[#3987e5]"> Skip search cache</label>
+          </div>
+        </div>
+      </details>
+    </form>
+
+    <div id="status" class="hidden items-center gap-2 text-sm text-ink2"></div>
+    <div id="errorBox" class="hidden"></div>
+
+    <div id="queriesRow" class="hidden space-y-2">
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="label">Search queries</span><span id="queriesMeta" class="text-[11px] text-muted"></span>
+      </div>
+      <div id="queries" class="flex flex-wrap gap-2"></div>
+      <div id="notes" class="space-y-1"></div>
+    </div>
+
+    <div id="similarBanner" class="hidden"></div>
+    <div id="stats" class="hidden grid grid-cols-2 gap-3 lg:grid-cols-4"></div>
+
+    <div id="toolbar" class="hidden flex-wrap items-center gap-3">
+      <div class="flex items-center gap-1 rounded-lg border border-hair bg-surface p-1" role="group" aria-label="Filter by verdict" id="filters"></div>
+      <div id="verifyLine" class="flex items-center gap-2 text-xs text-ink2"></div>
+      <div class="ml-auto flex flex-wrap gap-2">
+        <button id="verifyMore" class="btn-ghost hidden" type="button">Verify next batch</button>
+        <button id="addMatches" class="btn-ghost" type="button">+ Add all matches to dataset</button>
+      </div>
+    </div>
+
+    <div id="results" class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"></div>
+    <div id="intro"></div>
+  </section>
+
+  <!-- ============================== COVERAGE ============================== -->
+  <section id="tab-coverage" class="hidden space-y-4" role="tabpanel">
+    <div class="flex flex-wrap items-end gap-3">
+      <div class="mr-auto max-w-3xl">
+        <h2 class="text-xl font-semibold tracking-tight">Coverage map: scenario × location</h2>
+        <p class="mt-1 text-sm text-ink2">One hybrid search per scenario across every camera, grouped by location. Red cells are edge cases you have no (verified) footage of: that is your next data-collection or simulation list.</p>
+      </div>
+      <button id="covRefresh" class="btn-ghost" type="button">
+        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg>Re-run searches</button>
+      <button id="warmBtn" class="btn-primary" type="button">
+        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>Warm cache (verify top hits)</button>
+    </div>
+    <div id="warmBox" class="hidden panel p-4"></div>
+    <div id="covSummary" class="grid grid-cols-2 gap-3 lg:grid-cols-4"></div>
+    <div id="covLegend" class="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-ink2"></div>
+    <div id="covBody" class="panel overflow-x-auto"></div>
+  </section>
+
+  <!-- ============================== DATASET ============================== -->
+  <section id="tab-dataset" class="hidden space-y-4" role="tabpanel">
+    <div class="panel flex flex-wrap items-end gap-4 p-4 sm:p-5">
+      <div class="mr-auto max-w-2xl">
+        <h2 class="text-xl font-semibold tracking-tight">Dataset</h2>
+        <p class="mt-1 text-sm text-ink2">Clips you picked, with their Cosmos verdicts. Export writes a manifest (S3 URIs, timestamps, camera, location, label, verdict) and versions it as a W&amp;B Artifact when W&amp;B is configured.</p>
+      </div>
+      <div class="w-full sm:w-72">
+        <label for="dsName" class="label">Dataset label</label>
+        <input id="dsName" type="text" maxlength="120" class="field mt-1.5" placeholder="e.g. pedestrian-into-road-v1">
+      </div>
+      <div class="flex gap-2">
+        <button id="exportBtn" class="btn-primary" type="button">
+          <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v3h16v-3"/></svg>Export manifest</button>
+        <button id="clearBtn" class="btn-ghost" type="button">Clear</button>
+      </div>
+    </div>
+    <div id="exportResult" class="hidden"></div>
+    <div id="dsSummary" class="text-sm text-ink2"></div>
+    <div id="dsList" class="panel divide-y divide-hair"></div>
+  </section>
+</main>
+
+<!-- ============================== DEBUG ============================== -->
+<div class="pointer-events-none fixed inset-x-0 bottom-0 z-40">
+  <div class="pointer-events-auto mx-auto max-w-7xl px-4">
+    <details id="debugBox" class="rounded-t-xl border border-b-0 border-hair bg-surface/95 shadow-2xl backdrop-blur">
+      <summary class="flex cursor-pointer items-center gap-2 px-4 py-2 text-xs text-ink2 hover:text-ink">
+        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M14 5l-4 14"/></svg>
+        <span class="font-semibold">Debug</span><span class="text-muted">·</span><span id="debugTitle" class="truncate">no API calls yet</span>
+      </summary>
+      <pre id="debugPre" class="max-h-[45vh] overflow-auto whitespace-pre-wrap break-all px-4 pb-4 font-mono text-[11px] leading-relaxed text-ink2"></pre>
+    </details>
+  </div>
+</div>
+<div id="toast" class="pointer-events-none fixed right-4 top-4 z-50 flex max-w-sm flex-col gap-2"></div>
+
+<script>
+'use strict';
+// The page is served at /app or /app/ behind an Ingress rewrite, or at / locally: never use absolute /api URLs.
+const BASE = location.pathname.endsWith('/') ? location.pathname : location.pathname + '/';
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+// Clip URLs from the API are relative (api/clip?...): resolve them against the app's base path.
+const media = (u) => (u && !/^([a-z]+:)?\/\//i.test(u) && !u.startsWith('/') ? BASE + u : u);
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const sameText = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+const vkey = (scenario, source) => String(scenario || '').trim().toLowerCase().replace(/\s+/g, ' ') + '\u0000' + source;
+const fmt2 = (v) => (v == null || isNaN(v) ? '–' : Number(v).toFixed(2));
+const secs = (ms) => (ms == null ? '' : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`);
+const shortModel = (m) => { const s = String(m || '').split('/').pop(); return s.length > 30 ? s.slice(0, 29) + '…' : s; };
+const prettyLoc = (l) => (l === '(unknown)' ? 'Unknown' : String(l || '').replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()));
+function clock(s) { if (s == null || isNaN(s)) return null; s = Math.max(0, Math.round(Number(s))); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; }
+function span(c) { const a = clock(c.start_sec), b = clock(c.end_sec); return a && b ? `${a}–${b}` : (a || ''); }
+
+const ICON = {
+  check: '<svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7"/></svg>',
+  cross: '<svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="#fff" stroke-width="3.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+  q: '<svg viewBox="0 0 24 24" class="h-3 w-3" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"><path d="M9.2 9a3 3 0 1 1 4.3 2.7c-.9.4-1.5 1.2-1.5 2.2V15M12 18.5h.01"/></svg>',
+  pin: '<svg viewBox="0 0 24 24" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 21s-6.5-5.7-6.5-11A6.5 6.5 0 0 1 18.5 10c0 5.3-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/></svg>',
+  cam: '<svg viewBox="0 0 24 24" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
+  warn: '<svg viewBox="0 0 24 24" class="h-3.5 w-3.5 shrink-0" fill="none" stroke="#d03b3b" stroke-width="2.4" stroke-linejoin="round"><path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17h.01" stroke-linecap="round"/></svg>',
+  spinner: '<svg class="spin h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-opacity=".25" stroke-width="3"/><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>',
+  play: '<svg viewBox="0 0 24 24" class="h-5 w-5" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>',
+};
+
+const state = {
+  config: null, taxonomy: [], locations: [], maxVerify: 24,
+  runSeq: 0, view: null, prevView: null,
+  verdicts: new Map(), pending: new Set(), filter: 'all',
+  dataset: loadDataset(), coverage: null, coverageLoading: false, warmTimer: null,
+};
+
+// ------------------------------------------------------------------ API + debug + toast
+async function api(path, opts = {}) {
+  const init = { method: opts.method || (opts.body !== undefined ? 'POST' : 'GET'), headers: {} };
+  if (opts.body !== undefined) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(opts.body); }
+  const t0 = performance.now();
+  let res, data;
+  try {
+    res = await fetch(BASE + path, init);
+    const text = await res.text();
+    try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text.slice(0, 2000) }; }
+  } catch (err) {
+    if (!opts.quiet) setDebug(init.method, path, 0, performance.now() - t0, opts.body, { error: String(err) });
+    throw new Error('Network error: ' + err.message);
+  }
+  if (!opts.quiet) setDebug(init.method, path, res.status, performance.now() - t0, opts.body, data);
+  if (!res.ok) {
+    const detail = data && (data.error || data.detail);
+    throw new Error(typeof detail === 'string' ? detail : detail ? JSON.stringify(detail).slice(0, 300) : `HTTP ${res.status}`);
+  }
+  return data;
+}
+
+function setDebug(method, path, status, ms, request, response) {
+  $('#debugTitle').textContent = `${method} ${path} → ${status || 'network error'} · ${Math.round(ms)} ms`;
+  const text = JSON.stringify({ request: request ?? null, response }, null, 2);
+  $('#debugPre').textContent = text.length > 80000 ? text.slice(0, 80000) + '\n… (truncated)' : text;
+}
+
+function showRaw(obj, title) {
+  $('#debugTitle').textContent = title;
+  $('#debugPre').textContent = JSON.stringify(obj, null, 2);
+  $('#debugBox').open = true;
+}
+
+function toast(message, kind = 'info') {
+  const color = { info: 'bg-accent', good: 'bg-good', warn: 'bg-warn', crit: 'bg-crit' }[kind] || 'bg-accent';
+  const el = document.createElement('div');
+  el.className = 'pointer-events-auto flex items-start gap-2 rounded-xl border border-hair bg-raised px-3 py-2 text-sm text-ink shadow-2xl';
+  el.innerHTML = `<span class="mt-1.5 h-2 w-2 shrink-0 rounded-full ${color}"></span><span>${esc(message)}</span>`;
+  $('#toast').appendChild(el);
+  setTimeout(() => el.remove(), 4200);
+}
+
+// ------------------------------------------------------------------ config + header
+function pill(kind, label, title) {
+  const dot = { good: 'bg-good', warn: 'bg-warn', crit: 'bg-crit', off: 'bg-muted' }[kind];
+  return `<span class="chip" title="${esc(title || '')}"><span class="h-2 w-2 rounded-full ${dot}"></span>${esc(label)}</span>`;
+}
+
+function renderPills() {
+  const c = state.config;
+  if (!c) return;
+  $('#mockBanner').classList.toggle('hidden', !c.mock);
+  if (c.mock) {
+    $('#pills').innerHTML = [pill('warn', 'VSS · mock corpus'), pill('warn', 'Cosmos3-Reason · mock'),
+      pill('warn', 'LLM · mock templates'), pill('off', 'Weave · off')].join('');
+    return;
+  }
+  const v = c.vss, co = c.cosmos, l = c.llm;
+  $('#pills').innerHTML = [
+    !v.configured ? pill('off', 'VSS not configured') : v.ok ? pill('good', 'VSS connected')
+      : v.ok === false ? pill('crit', 'VSS login failed', v.error) : pill('warn', 'VSS checking…'),
+    !co.configured ? pill('off', 'Cosmos off · caption judge') : co.model ? pill('good', `Cosmos3-Reason · ${shortModel(co.model)}`, co.transcode ? 'clips shrunk to 480p/8fps before upload' : 'clips sent unshrunk (imageio-ffmpeg not installed)')
+      : pill('warn', 'Cosmos3-Reason unreachable', co.error),
+    !l.configured ? pill('off', 'LLM off · templates') : l.model ? pill('good', `W&B LLM · ${shortModel(l.model)}`)
+      : pill('warn', 'W&B LLM unreachable', l.error),
+    c.weave ? pill('good', 'Weave tracing') : pill('off', 'Weave off'),
+  ].join('');
+}
+
+function verifierName() {
+  const c = state.config;
+  if (!c) return 'Cosmos';
+  if (c.mock) return 'Mock Cosmos';
+  if (c.cosmos.configured) return 'Cosmos';
+  return c.llm.configured ? 'Caption judge' : 'Verifier';
+}
+
+async function loadConfig() {
+  try {
+    state.config = await api('api/config', { quiet: true });
+    state.maxVerify = state.config.max_verify || 24;
+    renderPills();
+    if (!state.config.mock && state.config.probing) setTimeout(loadConfig, 5000);
+  } catch (err) {
+    $('#pills').innerHTML = pill('crit', 'Server unreachable', err.message);
+  }
+}
+
+// ------------------------------------------------------------------ mine
+function readOptions() {
+  return {
+    top_k: Math.max(1, Math.min(100, parseInt($('#topK').value, 10) || 30)),
+    min_similarity: Number($('#minSim').value),
+    hybrid_text_weight: $('#weightDefault').checked ? null : Math.round((1 - Number($('#weight').value) / 100) * 100) / 100,
+    location: $('#location').value || null,
+  };
+}
+
+function setStatus(text, busy = true) {
+  const el = $('#status');
+  el.classList.toggle('hidden', !text);
+  el.classList.toggle('flex', !!text);
+  el.innerHTML = text ? `${busy ? ICON.spinner : ''}<span>${esc(text)}</span>` : '';
+}
+
+function showError(message) {
+  const box = $('#errorBox');
+  box.classList.toggle('hidden', !message);
+  box.innerHTML = message ? `<div class="flex items-start gap-3 rounded-xl border border-crit/50 bg-crit/10 px-4 py-3 text-sm text-ink">${ICON.warn}<div><div class="font-semibold">Something went wrong</div><div class="mt-0.5 text-ink2">${esc(message)}</div></div></div>` : '';
+}
+
+async function runMine() {
+  const scenario = $('#scenario').value.trim().replace(/\s+/g, ' ');
+  if (scenario.length < 2) { toast('Describe the edge case first', 'warn'); $('#scenario').focus(); return; }
+  const runId = ++state.runSeq;
+  const body = { scenario, ...readOptions(), fresh: $('#fresh').checked };
+  showError('');
+  $('#mineBtn').disabled = true;
+  const llmName = state.config && state.config.llm && state.config.llm.model ? shortModel(state.config.llm.model) : 'the LLM';
+  setStatus(state.config && state.config.mock ? 'Expanding the scenario (mock templates)…' : `Expanding the scenario with ${llmName}…`);
+  const timer = setTimeout(() => { if (runId === state.runSeq) setStatus('Hybrid search across every camera (caption + visual vectors)…'); }, 1400);
+  if (state.view) $('#results').classList.add('opacity-40');
+  try {
+    const res = await api('api/mine', { body });
+    if (runId !== state.runSeq) return;
+    state.prevView = null;
+    showView({ kind: 'mine', ...res });
+    autoVerify(state.view, runId);
+  } catch (err) {
+    if (runId === state.runSeq) showError(err.message);
+  } finally {
+    clearTimeout(timer);
+    if (runId === state.runSeq) { setStatus(''); $('#mineBtn').disabled = false; $('#results').classList.remove('opacity-40'); }
+  }
+}
+
+function mineFor(query, loc) {
+  $('#scenario').value = query;
+  const sel = $('#location');
+  if (loc && ![...sel.options].some((o) => o.value === loc)) sel.add(new Option(prettyLoc(loc), loc));
+  sel.value = loc || '';
+  if (loc) $('#advanced').open = true;
+  setTab('mine');
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  runMine();
+}
+
+function showView(view) {
+  view.candidates = view.candidates || [];
+  view.index = new Map(view.candidates.map((c, i) => [c.source, i]));
+  view.verifyTarget = view.verifyTarget || Math.min(view.candidates.length, state.maxVerify);
+  state.view = view;
+  state.filter = 'all';
+  $('#intro').innerHTML = '';
+  renderQueries();
+  renderSimilarBanner();
+  renderResults();
+  renderStats();
+}
+
+function renderQueries() {
+  const v = state.view;
+  $('#queriesRow').classList.toggle('hidden', !v);
+  if (!v) return;
+  const t = v.timings || {};
+  const model = v.kind === 'similar' ? 'seed clip caption' : v.expansion && v.expansion.model ? `expanded by ${shortModel(v.expansion.model)}` : 'template expansion';
+  $('#queriesMeta').textContent = `${model} · search ${secs(t.search_ms)}${t.expand_ms != null ? ` · expand ${secs(t.expand_ms)}` : ''}`;
+  const counts = new Map();
+  for (const c of v.candidates) for (const q of c.matched_queries || []) counts.set(q, (counts.get(q) || 0) + 1);
+  $('#queries').innerHTML = (v.queries || []).map((q, i) => `<span class="chip max-w-full ${i === 0 && v.kind === 'mine' ? 'border-accent/50 text-ink' : ''}" title="${esc(q)}"><span class="min-w-0 truncate sm:max-w-[22rem]">${esc(q)}</span><span class="shrink-0 rounded-full bg-plane px-1.5 text-[10px] text-muted tabular">${counts.get(q) || 0}</span></span>`).join('');
+  const notes = [...(v.notes || []), ...(v.errors || []).map((e) => `Query “${e.query}” failed: ${e.error}`)];
+  $('#notes').innerHTML = notes.map((n) => `<div class="text-xs text-warn">${esc(n)}</div>`).join('');
+}
+
+function renderSimilarBanner() {
+  const v = state.view, el = $('#similarBanner');
+  const show = v && v.kind === 'similar';
+  el.classList.toggle('hidden', !show);
+  if (!show) { el.innerHTML = ''; return; }
+  const s = v.seed || {};
+  el.innerHTML = `<div class="flex flex-wrap items-center gap-3 rounded-xl border border-accent/40 bg-accent-strong/10 px-4 py-3">
+    <div class="min-w-0 flex-1"><div class="label text-accent">More like this</div>
+    <div class="mt-0.5 truncate text-sm text-ink">“${esc((s.caption || '').slice(0, 180))}”</div>
+    <div class="mt-0.5 text-xs text-ink2">${esc(prettyLoc(s.location || ''))} · ${esc(s.camera_id || '')} · ${esc(span(s))}</div></div>
+    ${state.prevView ? '<button type="button" class="btn-ghost" id="backBtn">← Back to results</button>' : ''}</div>`;
+  const back = $('#backBtn');
+  if (back) back.onclick = () => { const prev = state.prevView; state.prevView = null; state.runSeq++; showView(prev); autoVerify(prev, state.runSeq); };
+}
+
+function introHTML() {
+  const steps = [
+    ['Describe', 'Type a rare scenario in plain English.'],
+    ['Expand', 'W&B Inference LLM rewrites it as caption-style search queries.'],
+    ['Search', 'VAST hybrid vector search (Cosmos-Embed1) across every camera.'],
+    ['Verify', 'Cosmos3-Reason watches each 5 s clip and votes match / no-match.'],
+    ['Ship', 'Find coverage gaps; export a versioned dataset (W&B Artifacts).'],
+  ];
+  return `<div class="panel p-5 sm:p-6">
+    <div class="label">How it works</div>
+    <ol class="mt-4 grid gap-4 sm:grid-cols-5">${steps.map(([t, d], i) => `<li class="relative rounded-xl border border-hair bg-plane/50 p-4">
+      <div class="flex h-7 w-7 items-center justify-center rounded-full bg-accent-strong/25 text-xs font-bold text-accent ring-1 ring-accent/40">${i + 1}</div>
+      <div class="mt-3 text-sm font-semibold text-ink">${t}</div><div class="mt-1 text-xs leading-relaxed text-ink2">${d}</div></li>`).join('')}</ol>
+    <p class="mt-4 text-xs text-muted">Pick an example above, or open <b class="text-ink2">Coverage</b> to see which edge cases your archive has no footage of.</p></div>`;
+}
+
+// ------------------------------------------------------------------ cards
+function verdictOf(source, scenario) {
+  const v = state.view;
+  return state.verdicts.get(vkey(scenario || (v && v.scenario), source)) || null;
+}
+
+function badgeHTML(vd, pending, eligible) {
+  const base = 'inline-flex items-center gap-1.5 rounded-full bg-black/75 px-2 py-1 text-xs font-semibold text-ink ring-1 ring-white/10 backdrop-blur';
+  const dot = (bg, icon) => `<span class="flex h-4 w-4 items-center justify-center rounded-full ${bg}">${icon}</span>`;
+  if (pending) return `<span class="${base}">${ICON.spinner}${verifierName().endsWith('Cosmos') ? 'Watching…' : 'Verifying…'}</span>`;
+  if (!vd) return `<span class="${base} font-medium text-ink2">${eligible ? 'Queued' : 'Not verified'}</span>`;
+  const conf = vd.confidence != null ? ` <span class="font-normal text-ink2 tabular">${fmt2(vd.confidence)}</span>` : '';
+  if (vd.match === true) return `<span class="${base}">${dot('bg-good', ICON.check)}Match${conf}</span>`;
+  if (vd.match === false) return `<span class="${base}">${dot('bg-crit', ICON.cross)}No${conf}</span>`;
+  return `<span class="${base}">${dot('bg-muted', ICON.q)}Unsure</span>`;
+}
+
+function methodLabel(m) {
+  return { 'cosmos-video': 'Cosmos3-Reason watched the clip', caption: 'Judged from the caption (W&B LLM)', mock: 'Mock verifier', none: 'Not verified', error: 'Verification error' }[m] || 'Verdict';
+}
+
+function whyHTML(vd) {
+  if (!vd) return '';
+  const tone = vd.match === true ? 'border-good/50' : vd.match === false ? 'border-crit/50' : 'border-axis';
+  return `<div class="rounded-lg border-l-2 ${tone} bg-plane/60 px-2.5 py-1.5 text-xs leading-snug text-ink2">
+    <div class="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted">${esc(methodLabel(vd.method))}${vd.cached ? ' · cached' : ''}</div>${esc(vd.why || '')}
+    ${vd.note ? `<div class="mt-1 text-[11px] text-muted">${esc(vd.note)}</div>` : ''}</div>`;
+}
+
+function mediaHTML(c) {
+  const meta = `${esc(c.camera_id || 'camera')} · ${esc(span(c))}`;
+  if (c.stream_url) {
+    return `<div class="video-shell relative aspect-video overflow-hidden">
+      <div class="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1 text-ink2">${ICON.play}<span class="text-[11px]">hover or click to play</span></div>
+      <video class="relative h-full w-full bg-transparent object-contain" controls muted preload="none" playsinline src="${esc(media(c.stream_url))}"></video></div>`;
+  }
+  const icon = c.capture_type === 'warehouse' ? '<path d="M3 21V9l9-5 9 5v12M7 21v-7h10v7M7 17h10"/>'
+    : c.location === 'indoor' ? '<path d="M4 21V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v16M9 21v-5h6v5M8 7h2M14 7h2M8 11h2M14 11h2"/>'
+      : '<path d="M5 17h14l-1.5-6.5A2 2 0 0 0 15.6 9H8.4a2 2 0 0 0-1.9 1.5zM7 17v2M17 17v2M3 12h2M19 12h2"/><circle cx="8" cy="14" r=".6"/><circle cx="16" cy="14" r=".6"/>';
+  return `<div class="video-shell relative flex aspect-video flex-col items-center justify-center gap-1.5 overflow-hidden">
+    <svg viewBox="0 0 24 24" class="h-9 w-9 text-muted" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">${icon}</svg>
+    <div class="text-[10px] font-semibold tracking-[0.2em] text-muted">MOCK CLIP · NO VIDEO</div>
+    <div class="text-xs text-ink2">${meta}</div></div>`;
+}
+
+function yoloTag(c) {
+  const counts = c.object_counts && Object.keys(c.object_counts).length
+    ? Object.entries(c.object_counts) : (c.objects || []).map((o) => [o, null]);
+  if (!counts.length) return '';
+  const text = counts.slice(0, 4).map(([o, n]) => (n ? `${o} ×${n}` : o)).join(' · ');
+  return `<span class="tag" title="YOLO11 detections in this clip"><span class="font-semibold text-muted">YOLO</span>${esc(text)}</span>`;
+}
+
+function contextHTML(c) {
+  const ctx = c.context;
+  if (!c.stream_url || !ctx || !(ctx.prev || ctx.next)) return '';
+  const btn = (side, label, seg) => `<button type="button" class="seg !px-2 !py-0.5" data-ctx="${side}" aria-pressed="${side === 'hit'}" ${side !== 'hit' && !(seg && seg.stream_url) ? 'disabled' : ''} title="${esc(seg ? `${span(seg)} ${seg.caption || ''}` : '')}">${label}</button>`;
+  return `<div class="ctx flex items-center gap-1"><span class="mr-1 text-[11px] text-muted">Context</span>
+    ${btn('prev', '◀ before', ctx.prev)}${btn('hit', 'hit', c)}${btn('next', 'after ▶', ctx.next)}</div>`;
+}
+
+function cardHTML(c, i) {
+  const v = state.view;
+  const inDs = inDataset(c.source, v.scenario);
+  const objs = yoloTag(c);
+  const matched = (c.matched_queries || []).length;
+  return `<article class="panel flex flex-col overflow-hidden transition" data-idx="${i}">
+    <div class="relative">${mediaHTML(c)}
+      <div class="verdict absolute left-2 top-2"></div>
+      <div class="absolute right-2 top-2 rounded-full bg-black/75 px-2 py-1 text-[11px] font-semibold text-ink ring-1 ring-white/10 tabular" title="hybrid similarity">sim ${fmt2(c.similarity)}</div>
+    </div>
+    <div class="flex flex-1 flex-col gap-2 p-3">
+      <div class="flex flex-wrap gap-1.5">
+        <span class="tag">${ICON.pin}${esc(prettyLoc(c.location || '(unknown)'))}</span>
+        <span class="tag">${ICON.cam}${esc(c.camera_id || 'unknown camera')}</span>
+        ${span(c) ? `<span class="tag tabular">${ICON.clock}${esc(span(c))}</span>` : ''}${objs}
+        ${matched > 1 ? `<span class="tag" title="${esc((c.matched_queries || []).join(' | '))}">found by ${matched} queries</span>` : ''}
+      </div>
+      ${contextHTML(c)}
+      <p class="caption clamp-3 text-[13px] leading-snug text-ink2">${esc(c.caption || 'No caption')}</p>
+      ${(c.caption || '').length > 150 ? '<button type="button" class="more self-start text-[11px] font-medium text-accent hover:underline">Show more</button>' : ''}
+      <div class="why"></div>
+      <div class="mt-auto flex items-center gap-2 pt-1">
+        <button type="button" class="similar btn-ghost whitespace-nowrap">More like this</button>
+        <button type="button" class="add btn-ghost whitespace-nowrap ${inDs ? '!border-good/60 !text-ink' : ''}">${inDs ? '✓ In dataset' : '+ Dataset'}</button>
+        <button type="button" class="raw ml-auto shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] text-muted hover:bg-raised hover:text-ink" title="Show the raw backend row in the debug panel" aria-label="Show raw backend row">{ }</button>
+      </div>
+    </div></article>`;
+}
+
+function renderResults() {
+  const v = state.view, grid = $('#results');
+  if (!v) { grid.innerHTML = ''; return; }
+  if (!v.candidates.length) {
+    grid.innerHTML = `<div class="panel col-span-full p-8 text-center"><div class="text-base font-semibold">No clips matched</div>
+      <p class="mt-1 text-sm text-ink2">Lower the min similarity, clear the location filter, or rephrase the scenario. ${v.kind === 'mine' ? 'An empty result is itself a coverage gap.' : ''}</p></div>`;
+    return;
+  }
+  grid.innerHTML = v.candidates.map(cardHTML).join('');
+  for (const card of $$('#results [data-idx]')) {
+    const i = Number(card.dataset.idx);
+    const c = v.candidates[i];
+    updateCard(i);
+    const video = $('video', card);
+    if (video) {
+      card.addEventListener('mouseenter', () => { video.play().catch(() => {}); });
+      card.addEventListener('mouseleave', () => { if (!video.paused) video.pause(); });
+      video.addEventListener('error', () => {
+        video.closest('.video-shell').innerHTML = '<div class="flex h-full flex-col items-center justify-center gap-1 px-4 text-center text-xs text-ink2">Playback unavailable<span class="text-[11px] text-muted">this browser can\'t decode the clip, or the token expired (re-run the search)</span></div>';
+      });
+    }
+    $('.similar', card).onclick = () => moreLikeThis(i);
+    $('.add', card).onclick = () => toggleDataset(i);
+    $('.raw', card).onclick = () => showRaw(c, `candidate · ${c.source}`);
+    const more = $('.more', card);
+    if (more) more.onclick = () => { const p = $('.caption', card); const open = p.classList.toggle('clamp-3'); more.textContent = open ? 'Show more' : 'Show less'; };
+    for (const b of $$('.ctx [data-ctx]', card)) b.onclick = () => showContext(card, c, b.dataset.ctx);
+  }
+  applyFilter();
+}
+
+// Before / after: swap the player to the neighbouring 5 s segment of the same parent video.
+function showContext(card, c, side) {
+  const seg = side === 'hit' ? c : (c.context || {})[side];
+  if (!seg) return;
+  for (const b of $$('.ctx [data-ctx]', card)) b.setAttribute('aria-pressed', String(b.dataset.ctx === side));
+  const video = $('video', card);  // may be gone if playback failed; the caption still switches
+  if (video && seg.stream_url) { video.src = media(seg.stream_url); video.play().catch(() => {}); }
+  const prefix = side === 'prev' ? `Before (${span(seg)}): ` : side === 'next' ? `After (${span(seg)}): ` : '';
+  $('.caption', card).textContent = prefix + (seg.caption || 'No caption');
+}
+
+function updateCard(i) {
+  const v = state.view;
+  const card = $(`#results [data-idx="${i}"]`);
+  if (!v || !card) return;
+  const c = v.candidates[i];
+  const vd = verdictOf(c.source);
+  const pending = state.pending.has(vkey(v.scenario, c.source));
+  $('.verdict', card).innerHTML = badgeHTML(vd, pending, i < v.verifyTarget);
+  $('.why', card).innerHTML = whyHTML(vd);
+  card.classList.toggle('ring-1', !!vd && vd.match === true);
+  card.classList.toggle('ring-good/40', !!vd && vd.match === true);
+  const inDs = inDataset(c.source, v.scenario), add = $('.add', card);
+  add.textContent = inDs ? '✓ In dataset' : '+ Dataset';
+  add.classList.toggle('!border-good/60', inDs);
+  add.classList.toggle('!text-ink', inDs);
+}
+
+// ------------------------------------------------------------------ verification
+function setVerdict(scenario, source, vd) {
+  state.verdicts.set(vkey(scenario, source), vd);
+  let changed = false;
+  for (const item of state.dataset) {
+    if (item.source === source && sameText(item.scenario, scenario)) { item.verdict = slimVerdict(vd); changed = true; }
+  }
+  if (changed) saveDataset();
+}
+
+async function verifySources(view, sources, runId) {
+  const batches = [];
+  for (let i = 0; i < sources.length; i += 4) batches.push(sources.slice(i, i + 4));
+  let next = 0;
+  const worker = async () => {
+    while (next < batches.length) {
+      if (state.view !== view) return;  // a new search replaced these results: stop spending GPU time
+      const batch = batches[next++];
+      batch.forEach((s) => state.pending.add(vkey(view.scenario, s)));
+      refreshCards(view, batch);
+      try {
+        const res = await api('api/verify', { body: { scenario: view.scenario, sources: batch } });
+        for (const s of batch) setVerdict(view.scenario, s, (res.verdicts || {})[s] || { match: null, why: 'no verdict returned', method: 'error' });
+      } catch (err) {
+        for (const s of batch) setVerdict(view.scenario, s, { match: null, why: 'Verification request failed: ' + err.message, method: 'error' });
+      } finally {
+        batch.forEach((s) => state.pending.delete(vkey(view.scenario, s)));
+        refreshCards(view, batch);
+        if (state.view === view) { renderStats(); applyFilter(); }
+      }
+    }
+  };
+  await Promise.all([worker(), worker()]);
+}
+
+function refreshCards(view, sources) {
+  if (state.view !== view) return;
+  for (const s of sources) { const i = view.index.get(s); if (i != null) updateCard(i); }
+  renderStats();
+}
+
+async function autoVerify(view, runId) {
+  const todo = view.candidates.slice(0, view.verifyTarget).map((c) => c.source).filter((s) => !state.verdicts.has(vkey(view.scenario, s)));
+  renderStats();
+  if (todo.length) await verifySources(view, todo, runId);
+  if (state.view === view) renderStats();
+}
+
+async function verifyMore() {
+  const v = state.view;
+  if (!v) return;
+  const before = v.verifyTarget;
+  v.verifyTarget = Math.min(v.candidates.length, v.verifyTarget + state.maxVerify);
+  const todo = v.candidates.slice(before, v.verifyTarget).map((c) => c.source).filter((s) => !state.verdicts.has(vkey(v.scenario, s)));
+  for (let i = before; i < v.verifyTarget; i++) updateCard(i);
+  await verifySources(v, todo, state.runSeq);
+}
+
+function stats(v) {
+  const out = { n: v.candidates.length, done: 0, verified: 0, matches: 0, rejected: 0, unsure: 0, target: v.verifyTarget };
+  for (const c of v.candidates) {
+    const vd = state.verdicts.get(vkey(v.scenario, c.source));
+    if (!vd) continue;
+    out.done++;
+    if (vd.match === true) { out.matches++; out.verified++; } else if (vd.match === false) { out.rejected++; out.verified++; } else out.unsure++;
+  }
+  out.precision = out.verified ? out.matches / out.verified : null;
+  out.running = v.candidates.some((c) => state.pending.has(vkey(v.scenario, c.source)));
+  return out;
+}
+
+function meter(fraction, color) {
+  const pct = Math.max(0, Math.min(100, Math.round((fraction || 0) * 100)));
+  return `<div class="mt-2 h-1.5 overflow-hidden rounded-full bg-raised"><div class="h-full rounded-full ${color}" style="width:${pct}%"></div></div>`;
+}
+
+function renderStats() {
+  const v = state.view;
+  const show = !!v && v.candidates.length > 0;
+  $('#stats').classList.toggle('hidden', !show);
+  $('#toolbar').classList.toggle('hidden', !show);
+  $('#toolbar').classList.toggle('flex', show);
+  if (!show) return;
+  const s = stats(v);
+  const who = verifierName();
+  const tile = (label, value, sub) => `<div class="tile"><div class="label">${label}</div><div class="mt-1 text-3xl font-semibold tracking-tight">${value}</div>${sub}</div>`;
+  $('#stats').innerHTML = [
+    tile('Candidates', s.n, `<div class="mt-1 text-xs text-ink2">${v.queries ? v.queries.length : 1} ${v.kind === 'similar' ? 'seed query' : 'queries'} · ${secs((v.timings || {}).total_ms)}</div>`),
+    tile(`${esc(who)} verified`, `${s.done}<span class="text-lg text-muted">/${s.target}</span>`, meter(s.target ? s.done / s.target : 0, 'bg-accent')),
+    tile('Verified matches', `${s.matches}`, `<div class="mt-1 flex items-center gap-3 text-xs text-ink2"><span class="inline-flex items-center gap-1"><span class="h-2 w-2 rounded-full bg-crit"></span>${s.rejected} rejected</span><span class="inline-flex items-center gap-1"><span class="h-2 w-2 rounded-full bg-muted"></span>${s.unsure} unsure</span></div>`),
+    tile('Raw-search precision', s.precision == null ? '–' : `${Math.round(s.precision * 100)}%`, `<div class="mt-1 text-xs text-ink2">${s.verified ? `${s.matches} of ${s.verified} verified clips really show it` : 'waiting for verdicts'}</div>${meter(s.precision, 'bg-good')}`),
+  ].join('');
+  $('#verifyLine').innerHTML = s.running ? `${ICON.spinner}<span>${esc(who)} verified ${s.done}/${s.target}</span>`
+    : s.done ? `<span>${esc(who)} verified ${s.done}/${s.target}</span>` : '';
+  const counts = { all: s.n, match: s.matches, no: s.rejected, unverified: s.n - s.matches - s.rejected };
+  const labels = { all: 'All', match: '✓ Matches', no: '✗ Rejected', unverified: 'Unverified' };
+  $('#filters').innerHTML = Object.keys(labels).map((k) => `<button type="button" class="seg" data-filter="${k}" aria-pressed="${state.filter === k}">${labels[k]} <span class="text-muted tabular">${counts[k]}</span></button>`).join('');
+  for (const b of $$('#filters [data-filter]')) b.onclick = () => { state.filter = b.dataset.filter; renderStats(); applyFilter(); };
+  $('#verifyMore').classList.toggle('hidden', v.verifyTarget >= v.candidates.length || s.running);
+  $('#addMatches').disabled = !s.matches;
+}
+
+function applyFilter() {
+  const v = state.view;
+  if (!v) return;
+  for (const card of $$('#results [data-idx]')) {
+    const vd = verdictOf(v.candidates[Number(card.dataset.idx)].source);
+    const m = vd ? vd.match : undefined;
+    const show = state.filter === 'all' || (state.filter === 'match' && m === true) || (state.filter === 'no' && m === false)
+      || (state.filter === 'unverified' && m !== true && m !== false);
+    card.classList.toggle('hidden', !show);
+  }
+}
+
+async function moreLikeThis(i) {
+  const v = state.view, c = v.candidates[i];
+  const runId = ++state.runSeq;
+  showError('');
+  setStatus('Finding clips that look like this one…');
+  $('#results').classList.add('opacity-40');
+  try {
+    const opts = readOptions();
+    const res = await api('api/similar', { body: { scenario: v.scenario, source: c.source, top_k: opts.top_k, min_similarity: opts.min_similarity, hybrid_text_weight: opts.hybrid_text_weight, location: opts.location } });
+    if (runId !== state.runSeq) return;
+    if (v.kind === 'mine') state.prevView = v;
+    showView({ kind: 'similar', seed: c, ...res, scenario: v.scenario });
+    window.scrollTo({ top: $('#similarBanner').offsetTop - 120, behavior: 'smooth' });
+    autoVerify(state.view, runId);
+  } catch (err) {
+    if (runId === state.runSeq) showError(err.message);
+  } finally {
+    if (runId === state.runSeq) { setStatus(''); $('#results').classList.remove('opacity-40'); }
+  }
+}
+
+// ------------------------------------------------------------------ dataset
+function loadDataset() {
+  try { const d = JSON.parse(localStorage.getItem('ecm.dataset.v1') || '[]'); return Array.isArray(d) ? d : []; } catch { return []; }
+}
+function saveDataset() {
+  try { localStorage.setItem('ecm.dataset.v1', JSON.stringify(state.dataset)); } catch { /* private mode: keep in memory */ }
+  $('#dsCount').textContent = state.dataset.length;
+  if (!$('#tab-dataset').classList.contains('hidden')) renderDataset();
+}
+const slimVerdict = (vd) => (vd ? { match: vd.match ?? null, confidence: vd.confidence ?? null, why: vd.why || null, method: vd.method || null } : null);
+function inDataset(source, scenario) { return state.dataset.some((d) => d.source === source && sameText(d.scenario, scenario)); }
+function datasetItem(c, scenario) {
+  return { source: c.source, scenario, original_video: c.original_video, start_sec: c.start_sec, end_sec: c.end_sec,
+    camera_id: c.camera_id, location: c.location, caption: c.caption, similarity: c.similarity,
+    verdict: slimVerdict(state.verdicts.get(vkey(scenario, c.source))), added_at: Date.now() };
+}
+function toggleDataset(i) {
+  const v = state.view, c = v.candidates[i];
+  const at = state.dataset.findIndex((d) => d.source === c.source && sameText(d.scenario, v.scenario));
+  if (at >= 0) state.dataset.splice(at, 1); else state.dataset.push(datasetItem(c, v.scenario));
+  saveDataset();
+  updateCard(i);
+}
+function addAllMatches() {
+  const v = state.view;
+  if (!v) return;
+  let added = 0;
+  v.candidates.forEach((c, i) => {
+    const vd = verdictOf(c.source);
+    if (vd && vd.match === true && !inDataset(c.source, v.scenario)) { state.dataset.push(datasetItem(c, v.scenario)); added++; updateCard(i); }
+  });
+  saveDataset();
+  toast(added ? `Added ${added} verified clip${added > 1 ? 's' : ''} to the dataset` : 'All verified matches are already in the dataset', added ? 'good' : 'info');
+}
+
+function renderDataset() {
+  const ds = state.dataset;
+  const m = ds.filter((d) => d.verdict && d.verdict.match === true).length;
+  const r = ds.filter((d) => d.verdict && d.verdict.match === false).length;
+  $('#dsSummary').innerHTML = ds.length ? `<b class="text-ink">${ds.length}</b> clips · <span class="inline-flex items-center gap-1"><span class="h-2 w-2 rounded-full bg-good"></span>${m} verified matches</span> · <span class="inline-flex items-center gap-1"><span class="h-2 w-2 rounded-full bg-crit"></span>${r} rejected</span> · ${ds.length - m - r} unverified` : '';
+  if (!$('#dsName').value && ds.length) $('#dsName').placeholder = mostCommonScenario() || 'edge cases';
+  $('#exportBtn').disabled = !ds.length;
+  if (!ds.length) {
+    $('#dsList').innerHTML = '<div class="p-8 text-center text-sm text-ink2">No clips yet. Mine a scenario and press <b class="text-ink">+ Dataset</b> on verified matches (or <b class="text-ink">Add all matches</b>).</div>';
+    return;
+  }
+  $('#dsList').innerHTML = ds.map((d, i) => {
+    const vd = d.verdict;
+    const icon = !vd || vd.match == null ? '<span class="flex h-5 w-5 items-center justify-center rounded-full bg-muted">' + ICON.q + '</span>'
+      : vd.match ? '<span class="flex h-5 w-5 items-center justify-center rounded-full bg-good">' + ICON.check + '</span>'
+        : '<span class="flex h-5 w-5 items-center justify-center rounded-full bg-crit">' + ICON.cross + '</span>';
+    const state_ = !vd || vd.match == null ? 'unverified' : vd.match ? `match ${fmt2(vd.confidence)}` : `rejected ${fmt2(vd.confidence)}`;
+    return `<div class="flex items-start gap-3 p-3 sm:p-4">
+      <div class="mt-0.5 shrink-0" title="${esc(state_)}">${icon}</div>
+      <div class="min-w-0 flex-1">
+        <div class="clamp-3 text-sm text-ink">${esc(d.caption || d.source)}</div>
+        <div class="mt-1.5 flex flex-wrap gap-1.5">
+          <span class="tag !text-ink">${esc(d.scenario)}</span><span class="tag">${ICON.pin}${esc(prettyLoc(d.location || '(unknown)'))}</span>
+          <span class="tag">${ICON.cam}${esc(d.camera_id || '?')}</span>${span(d) ? `<span class="tag tabular">${ICON.clock}${esc(span(d))}</span>` : ''}
+          <span class="tag tabular">sim ${fmt2(d.similarity)}</span><span class="tag">${esc(state_)}</span>
+        </div>
+        ${vd && vd.why ? `<div class="mt-1.5 text-xs text-ink2">${esc(vd.why)}</div>` : ''}
+        <div class="mt-1 truncate font-mono text-[11px] text-muted" title="${esc(d.source)}">${esc(d.source)}</div>
+      </div>
+      <button type="button" class="rounded-lg px-2 py-1 text-xs text-muted hover:bg-raised hover:text-ink" data-remove="${i}" aria-label="Remove from dataset">Remove</button></div>`;
+  }).join('');
+  for (const b of $$('#dsList [data-remove]')) b.onclick = () => { state.dataset.splice(Number(b.dataset.remove), 1); saveDataset(); renderDataset(); if (state.view) state.view.candidates.forEach((_, i) => updateCard(i)); };
+}
+
+function mostCommonScenario() {
+  const counts = new Map();
+  for (const d of state.dataset) counts.set(d.scenario, (counts.get(d.scenario) || 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([s]) => s)[0] || '';
+}
+
+async function exportDataset() {
+  if (!state.dataset.length) { toast('Add clips to the dataset first', 'warn'); return; }
+  const scenario = $('#dsName').value.trim() || mostCommonScenario() || 'edge cases';
+  const btn = $('#exportBtn');
+  btn.disabled = true;
+  btn.innerHTML = `${ICON.spinner} Exporting…`;
+  try {
+    const res = await api('api/export', { body: { scenario, items: state.dataset } });
+    const c = res.counts || {};
+    const box = $('#exportResult');
+    box.classList.remove('hidden');
+    box.innerHTML = `<div class="flex flex-wrap items-center gap-3 rounded-xl border border-good/40 bg-good/10 px-4 py-3">
+      <span class="flex h-6 w-6 items-center justify-center rounded-full bg-good">${ICON.check}</span>
+      <div class="mr-auto text-sm"><div class="font-semibold text-ink">Exported ${c.items ?? state.dataset.length} clips</div>
+      <div class="text-xs text-ink2">${c.matches ?? 0} verified matches · ${c.rejected ?? 0} rejected · ${c.unverified ?? 0} unverified · id ${esc(res.id)}</div></div>
+      <a class="btn-primary" href="${esc(BASE + res.manifest_url)}" download>Download manifest.json</a>
+      ${res.wandb_url ? `<a class="btn-ghost" href="${esc(res.wandb_url)}" target="_blank" rel="noopener">Open W&amp;B Artifact run ↗</a>` : '<span class="text-xs text-muted">W&amp;B Artifact: not configured (manifest only)</span>'}</div>`;
+    toast('Manifest written' + (res.wandb_url ? ' and versioned in W&B' : ''), 'good');
+  } catch (err) {
+    toast(err.message, 'crit');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v3h16v-3"/></svg>Export manifest';
+  }
+}
+
+// ------------------------------------------------------------------ coverage
+async function loadCoverage(refresh = false) {
+  if (state.coverageLoading) return;
+  state.coverageLoading = true;
+  const body = $('#covBody');
+  if (!state.coverage) body.innerHTML = `<div class="flex items-center gap-2 p-6 text-sm text-ink2">${ICON.spinner} Running one search per scenario across every camera…</div>`;
+  else body.classList.add('opacity-50');
+  try {
+    state.coverage = await api('api/coverage' + (refresh ? '?refresh=1' : ''));
+    renderCoverage();
+  } catch (err) {
+    body.innerHTML = `<div class="flex items-start gap-3 p-6 text-sm">${ICON.warn}<div><div class="font-semibold">Coverage unavailable</div><div class="mt-0.5 text-ink2">${esc(err.message)}</div></div></div>`;
+  } finally {
+    state.coverageLoading = false;
+    body.classList.remove('opacity-50');
+  }
+}
+
+function covCell(cell, label, loc, max) {
+  // Shade = strong search hits; a covered cell (verified matches, even with few strong hits) never looks empty.
+  const shade = Math.max(cell.hits ? 0.12 + 0.58 * Math.sqrt(cell.hits / max) : 0, cell.verified_matches ? 0.14 : 0);
+  const style = cell.gap ? 'background:rgba(208,59,59,.13);box-shadow:inset 0 0 0 1px rgba(208,59,59,.6)' : `background:rgba(37,106,191,${shade.toFixed(3)})`;
+  const tip = `${label} · ${loc ? prettyLoc(loc) : 'all cameras'}: ${cell.hits} strong search hits; ${cell.verified_total ? `${cell.verified_matches} of ${cell.verified_total} verified clips match` : 'nothing verified yet'}${cell.gap ? ' · GAP' : ''}. Click to mine.`;
+  const verified = cell.verified_total
+    ? `<div class="text-[11px] text-ink2 tabular"><span class="text-good">✓</span> ${cell.verified_matches}/${cell.verified_total}</div>`
+    : `<div class="text-[11px] text-muted">${cell.gap ? 'no hits' : 'unverified'}</div>`;
+  const gap = cell.gap ? `<div class="mt-0.5 inline-flex items-center gap-1 text-[10px] font-bold tracking-wider text-ink">${ICON.warn}GAP</div>` : '';
+  return `<button type="button" class="cov-cell flex h-full min-h-[64px] w-full flex-col items-start justify-center rounded-lg px-2.5 py-2 text-left transition hover:ring-2 hover:ring-accent" style="${style}" title="${esc(tip)}" data-loc="${esc(loc || '')}">
+    <div class="text-base font-semibold leading-none tabular">${cell.hits}<span class="ml-1 text-[10px] font-normal text-ink2">hits</span></div>${verified}${gap}</button>`;
+}
+
+function renderCoverage() {
+  const cv = state.coverage;
+  if (!cv) return;
+  const locs = cv.locations || [];
+  const maxHits = Math.max(1, ...cv.scenarios.flatMap((t) => locs.map((l) => ((cv.cells[t.id] || {})[l] || {}).hits || 0)));
+  const maxTotal = Math.max(1, ...cv.scenarios.map((t) => (cv.totals[t.id] || {}).hits || 0));
+  const s = cv.summary || {};
+  const tile = (label, value, sub) => `<div class="tile"><div class="label">${label}</div><div class="mt-1 text-3xl font-semibold tracking-tight">${value}</div><div class="mt-1 text-xs text-ink2">${sub}</div></div>`;
+  const hitSim = cv.params && cv.params.hit_similarity != null ? Number(cv.params.hit_similarity).toFixed(2) : '0.20';
+  $('#covSummary').innerHTML = [
+    tile('Gap cells', `${s.gaps}<span class="text-lg text-muted">/${s.cells}</span>`, s.unverified ? `${s.unverified} more cells unverified: press Warm cache` : 'scenario × location with no verified footage'),
+    tile('Scenarios missing everywhere', s.scenario_gaps, 'no verified clip on any camera'),
+    tile('Verified clips', s.verified, `${s.verified_matches} confirmed matches · ${s.covered || 0} cells covered`),
+    tile('Locations', locs.length, `${cv.scenarios.length} scenarios · top ${cv.params ? cv.params.top_k : 100} hits each`),
+  ].join('');
+  $('#covLegend').innerHTML = `
+    <span class="inline-flex items-center gap-2"><span class="h-3 w-24 rounded" style="background:linear-gradient(90deg,rgba(37,106,191,.12),rgba(37,106,191,.7))"></span>search hits with similarity ≥ ${hitSim}</span>
+    <span class="inline-flex items-center gap-1.5"><span class="text-good">✓</span> m/n = verified matches / clips verified</span>
+    <span class="inline-flex items-center gap-1.5"><span class="h-3 w-5 rounded" style="background:rgba(208,59,59,.13);box-shadow:inset 0 0 0 1px rgba(208,59,59,.6)"></span>${ICON.warn}GAP = 0 verified matches (or 0 hits if unverified)</span>
+    ${cv.generated_at ? `<span class="ml-auto text-muted">searched ${new Date(cv.generated_at * 1000).toLocaleString()}</span>` : ''}`;
+  const head = `<tr><th class="sticky left-0 z-10 bg-surface px-3 py-2 text-left align-bottom"><span class="label">Scenario</span></th>
+    <th class="px-1.5 py-2 text-left align-bottom"><span class="label text-ink2">All cameras</span></th>
+    ${locs.map((l) => `<th class="px-1.5 py-2 text-left align-bottom"><span class="label whitespace-nowrap">${esc(prettyLoc(l))}</span></th>`).join('')}</tr>`;
+  const rows = cv.scenarios.map((t) => {
+    const err = (cv.errors || {})[t.id];
+    return `<tr class="border-t" data-sid="${esc(t.id)}">
+      <th scope="row" class="sticky left-0 z-10 min-w-[220px] max-w-[260px] bg-surface px-3 py-2 text-left align-middle font-normal">
+        <div class="text-sm font-medium text-ink">${esc(t.label)}</div><div class="clamp-3 text-[11px] text-muted">${esc(t.query)}</div>
+        ${err ? `<div class="text-[11px] text-warn">search failed: ${esc(err)}</div>` : ''}</th>
+      <td class="min-w-[104px] p-1.5 align-middle">${covCell(cv.totals[t.id], t.label, null, maxTotal)}</td>
+      ${locs.map((l) => `<td class="min-w-[104px] p-1.5 align-middle">${covCell((cv.cells[t.id] || {})[l] || { hits: 0, verified_matches: 0, verified_total: 0, gap: true }, t.label, l, maxHits)}</td>`).join('')}</tr>`;
+  }).join('');
+  $('#covBody').innerHTML = `<table class="cov-table w-full border-collapse text-sm"><thead>${head}</thead><tbody>${rows}</tbody></table>`;
+  for (const btn of $$('#covBody .cov-cell')) {
+    btn.onclick = () => {
+      const sid = btn.closest('tr').dataset.sid;
+      const t = cv.scenarios.find((x) => x.id === sid);
+      const loc = btn.dataset.loc;
+      mineFor(t.query, loc && loc !== '(unknown)' ? loc : null);
+    };
+  }
+}
+
+function showWarm(st) {
+  const box = $('#warmBox');
+  if (!st || st.phase === 'idle') { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+  const pct = st.total ? Math.round((100 * st.done) / st.total) : 0;
+  const tone = st.phase === 'error' ? 'bg-crit' : st.running ? 'bg-accent' : 'bg-good';
+  box.innerHTML = `<div class="flex flex-wrap items-center gap-2 text-sm">${st.running ? ICON.spinner : ''}
+    <span class="font-semibold">${st.running ? 'Warming cache' : st.phase === 'error' ? 'Warm-up failed' : 'Warm-up finished'}</span>
+    <span class="text-ink2">· ${esc(st.phase)} · ${st.done}/${st.total} · ${esc(st.detail || '')}</span>
+    <span class="ml-auto text-xs text-ink2 tabular">${st.verified || 0} verified · ${st.matches || 0} matches</span></div>
+    <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-raised"><div class="h-full rounded-full ${tone} transition-all" style="width:${pct}%"></div></div>
+    ${(st.errors || []).slice(0, 3).map((e) => `<div class="mt-1 text-xs text-warn">${esc(e)}</div>`).join('')}`;
+  $('#warmBtn').disabled = !!st.running;
+}
+
+async function startWarm() {
+  try { showWarm(await api('api/warm', { method: 'POST' })); pollWarm(); } catch (err) { toast(err.message, 'crit'); }
+}
+
+function pollWarm() {
+  clearTimeout(state.warmTimer);
+  state.warmTimer = setTimeout(async () => {
+    try {
+      const st = await api('api/warm', { quiet: true });
+      showWarm(st);
+      if (st.running) { pollWarm(); return; }
+      await loadCoverage(false);
+      toast(st.phase === 'done' ? `Cache warm: ${st.verified} clips verified` : 'Warm-up stopped: ' + (st.detail || st.phase), st.phase === 'done' ? 'good' : 'warn');
+    } catch { pollWarm(); }
+  }, 1500);
+}
+
+// ------------------------------------------------------------------ tabs + boot
+function setTab(name) {
+  for (const b of $$('[data-tab]')) b.setAttribute('aria-selected', String(b.dataset.tab === name));
+  for (const s of ['mine', 'coverage', 'dataset']) $('#tab-' + s).classList.toggle('hidden', s !== name);
+  try { history.replaceState(null, '', '#' + name); } catch { /* ignore */ }
+  if (name === 'coverage') {
+    if (!state.coverage) loadCoverage(false);
+    api('api/warm', { quiet: true }).then((st) => { showWarm(st); if (st.running) pollWarm(); }).catch(() => {});
+  }
+  if (name === 'dataset') renderDataset();
+}
+
+function wire() {
+  for (const b of $$('[data-tab]')) b.onclick = () => setTab(b.dataset.tab);
+  $('#mineForm').onsubmit = (e) => { e.preventDefault(); runMine(); };
+  $('#minSim').oninput = () => { $('#minSimVal').textContent = Number($('#minSim').value).toFixed(2); };
+  const syncWeight = () => {
+    const def = $('#weightDefault').checked;
+    $('#weight').disabled = def;
+    const w = 1 - Number($('#weight').value) / 100;
+    $('#weightVal').textContent = def ? 'default' : `text ${w.toFixed(2)} · visual ${(1 - w).toFixed(2)}`;
+  };
+  $('#weightDefault').onchange = syncWeight;
+  $('#weight').oninput = syncWeight;
+  $('#addMatches').onclick = addAllMatches;
+  $('#verifyMore').onclick = verifyMore;
+  $('#covRefresh').onclick = () => loadCoverage(true);
+  $('#warmBtn').onclick = startWarm;
+  $('#exportBtn').onclick = exportDataset;
+  $('#clearBtn').onclick = () => {
+    if (!state.dataset.length || !confirm(`Remove all ${state.dataset.length} clips from the dataset?`)) return;
+    state.dataset = []; saveDataset(); renderDataset();
+    if (state.view) state.view.candidates.forEach((_, i) => updateCard(i));
+  };
+}
+
+async function boot() {
+  wire();
+  $('#intro').innerHTML = introHTML();
+  $('#dsCount').textContent = state.dataset.length;
+  await loadConfig();
+  try {
+    const tx = await api('api/taxonomy', { quiet: true });
+    state.taxonomy = tx.scenarios || [];
+    $('#chips').innerHTML = '<span class="mr-1 self-center text-xs text-muted">Try:</span>' + state.taxonomy.map((t) => `<button type="button" class="chip transition hover:border-axis hover:text-ink" data-q="${esc(t.query)}" title="${esc(t.query)}">${esc(t.label)}</button>`).join('');
+    for (const b of $$('#chips [data-q]')) b.onclick = () => { $('#scenario').value = b.dataset.q; runMine(); };
+  } catch { /* chips are optional */ }
+  api('api/locations', { quiet: true }).then((r) => {
+    for (const l of r.locations || []) $('#location').add(new Option(prettyLoc(l), l));
+  }).catch(() => {});
+  const tab = (location.hash || '').slice(1);
+  setTab(['mine', 'coverage', 'dataset'].includes(tab) ? tab : 'mine');
+}
+
+boot();
+</script>
+</body>
+</html>

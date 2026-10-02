@@ -1,0 +1,12 @@
+[
+  {"id": "ped-into-road", "label": "Pedestrian steps into road", "query": "pedestrian stepping into the road in front of a moving vehicle"},
+  {"id": "person-near-forklift", "label": "Person near moving forklift", "query": "person walking close to a moving forklift in a warehouse aisle"},
+  {"id": "truck-lane-change", "label": "Truck lane change, dense traffic", "query": "truck changing lanes in dense highway traffic"},
+  {"id": "hard-braking", "label": "Hard braking / sudden stop", "query": "vehicle braking hard or stopping suddenly"},
+  {"id": "curbside-pickup", "label": "Curbside pick-up / drop-off", "query": "car stopped at the curb with someone getting in or out"},
+  {"id": "cyclist-in-traffic", "label": "Cyclist beside moving cars", "query": "cyclist riding next to moving cars"},
+  {"id": "crowded-doorway", "label": "Crowded corridor or doorway", "query": "group of people crowding a corridor or doorway"},
+  {"id": "blocked-walkway", "label": "Blocked aisle or walkway", "query": "aisle or walkway blocked by an obstacle"},
+  {"id": "night-crossing", "label": "Pedestrian crossing at night", "query": "pedestrian crossing at night"},
+  {"id": "rain-or-snow", "label": "Driving in rain or snow", "query": "driving in rain or snow"}
+]

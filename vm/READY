@@ -1,0 +1,2 @@
+This file unlocks deploying: vm/go.sh only deploys when it exists.
+Added once the app passed its tests and an end-to-end run against tests/fake_stack.py.

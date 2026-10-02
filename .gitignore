@@ -1,0 +1,30 @@
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# local env / secrets (credentials come from /config on the VM, never from the repo)
+.env
+.env.*
+*.config
+
+# generated at runtime
+preflight-report.txt
+.app-url
+.tunnel-url
+.cache/
+ecm-cache/
+*.mp4
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/
+
+# user-local tools fetched by vm/env.sh
+.bin/
