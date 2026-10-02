@@ -318,25 +318,43 @@ JUDGE_SYSTEM = (
 )
 
 
-def pick_model(ids: list[str]) -> str | None:
-    """Prefer a Nemotron chat model, else the first chat-capable id."""
+# Preferred W&B Inference model per job, matched case-insensitively against the ids GET /models returns:
+# Qwen 3.8 writes the search queries (fast, reliable JSON), DeepSeek V4 judges captions when Cosmos can't.
+MODEL_PREFS: dict[str, tuple[str, ...]] = {
+    "expand": ("qwen3.8", "deepseek-v4", "qwen3", "nemotron"),
+    "judge": ("deepseek-v4-pro", "deepseek-v4", "qwen3.8", "qwen3", "nemotron"),
+}
+
+
+def pick_model(ids: list[str], prefs: tuple[str, ...] = MODEL_PREFS["expand"]) -> str | None:
+    """First chat-capable id matching the earliest preference, else the first chat-capable id."""
     usable = [i for i in ids if not re.search(r"embed|rerank|reward|guard|safety|whisper|tts", i, re.I)] or ids
-    for model_id in usable:
-        if "nemotron" in model_id.lower():
-            return model_id
+    for pref in prefs:
+        for model_id in usable:
+            if pref in model_id.lower():
+                return model_id
     return usable[0] if usable else None
+
+
+def _hybrid_thinker(model_id: str) -> bool:
+    """Models that think by default and honour a "/no_think" system-prompt switch."""
+    return bool(re.search(r"nemotron|qwen3", model_id, re.I))
 
 
 class LLMClient:
     """Minimal async client for W&B Inference's OpenAI-compatible API."""
 
     def __init__(self, api_key: str = "", base_url: str = DEFAULT_INFERENCE_URL, entity: str = "",
-                 project: str = "", model: str = "", timeout: float = 60.0):
+                 project: str = "", model: str = "", timeout: float = 60.0,
+                 expand_model: str = "", judge_model: str = ""):
         self._key = api_key or ""
         self.base = (base_url or DEFAULT_INFERENCE_URL).strip().rstrip("/")
         self.entity = entity or ""
         self.project = project or ""
-        self._model = model or None
+        # Per-job pins (LLM_EXPAND_MODEL / LLM_JUDGE_MODEL, or LLM_MODEL for both); unpinned jobs are
+        # resolved from the live model list.
+        self._models: dict[str, str | None] = {"expand": expand_model or model or None,
+                                               "judge": judge_model or model or None}
         self._timeout = timeout
         self._client: httpx.AsyncClient | None = None
         self._lock: asyncio.Lock | None = None
@@ -344,7 +362,7 @@ class LLMClient:
         self.last_error: str | None = None
 
     def __repr__(self) -> str:  # never show the key
-        return f"LLMClient(configured={self.configured}, model={self._model!r})"
+        return f"LLMClient(configured={self.configured}, models={self._models!r})"
 
     @property
     def configured(self) -> bool:
@@ -352,7 +370,12 @@ class LLMClient:
 
     @property
     def model_name(self) -> str | None:
-        return self._model
+        """The query-expansion model (the one the UI shows)."""
+        return self._models["expand"]
+
+    @property
+    def judge_model_name(self) -> str | None:
+        return self._models["judge"]
 
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -371,15 +394,15 @@ class LLMClient:
             headers["OpenAI-Project"] = f"{self.entity}/{self.project}"
         return headers
 
-    async def model(self) -> str | None:
-        """LLM_MODEL, or discovered from GET {base}/models (retried at most once a minute)."""
-        if self._model or not self.configured:
-            return self._model
+    async def model(self, role: str = "expand") -> str | None:
+        """The pinned model for ``role``, else one picked from GET {base}/models (retried once a minute)."""
+        if self._models.get(role) or not self.configured:
+            return self._models.get(role)
         if self._lock is None:
             self._lock = asyncio.Lock()
         async with self._lock:
-            if self._model or time.monotonic() < self._retry_at:
-                return self._model
+            if self._models.get(role) or time.monotonic() < self._retry_at:
+                return self._models.get(role)
             self._retry_at = time.monotonic() + 60
             try:
                 resp = await self._http().get(f"{self.base}/models", headers=self._headers())
@@ -391,16 +414,18 @@ class LLMClient:
             except Exception as exc:  # noqa: BLE001
                 self.last_error = f"model list failed ({type(exc).__name__})"
                 return None
-            self._model = pick_model(ids)
-            self.last_error = None if self._model else "no models available"
-            return self._model
+            for job, prefs in MODEL_PREFS.items():
+                self._models[job] = self._models.get(job) or pick_model(ids, prefs)
+            self.last_error = None if self._models.get(role) else "no models available"
+            return self._models.get(role)
 
-    async def chat(self, messages: list[dict], max_tokens: int = 600, temperature: float = 0.2) -> str:
-        model = await self.model()
+    async def chat(self, messages: list[dict], max_tokens: int = 600, temperature: float = 0.2,
+                   role: str = "expand") -> str:
+        model = await self.model(role)
         if not model:
             raise LLMError(self.last_error or "LLM not configured")
-        if "nemotron" in model.lower() and messages and messages[0].get("role") == "system":
-            # Nemotron reasoning models: skip the long <think> phase.
+        if _hybrid_thinker(model) and messages and messages[0].get("role") == "system":
+            # Qwen3 / Nemotron think by default: skip the long <think> phase.
             messages = [{"role": "system", "content": "/no_think\n" + messages[0]["content"]}] + messages[1:]
         body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
         try:
@@ -425,10 +450,11 @@ class LLMClient:
                       "where they make sense.")
             try:
                 text = await self.chat([{"role": "system", "content": EXPAND_SYSTEM},
-                                        {"role": "user", "content": prompt}], max_tokens=700, temperature=0.3)
+                                        {"role": "user", "content": prompt}], max_tokens=700, temperature=0.3,
+                                       role="expand")
                 queries = _clean_queries(_queries_from_text(text), n)
                 if queries:
-                    return {"queries": queries, "model": self._model, "fallback": False}
+                    return {"queries": queries, "model": self.model_name, "fallback": False}
                 error = "LLM reply contained no queries"
             except LLMError as exc:
                 error = str(exc)
@@ -441,7 +467,8 @@ class LLMClient:
                   'Reply ONLY with JSON: {"match": true|false, "confidence": 0..1, '
                   '"why": "<one sentence citing the caption>"}')
         text = await self.chat([{"role": "system", "content": JUDGE_SYSTEM},
-                                {"role": "user", "content": prompt}], max_tokens=500, temperature=0.0)
+                                {"role": "user", "content": prompt}], max_tokens=1200, temperature=0.0,
+                               role="judge")
         verdict = parse_verdict(text)
-        verdict.update(method="caption", model=self._model)
+        verdict.update(method="caption", model=self.judge_model_name)
         return verdict

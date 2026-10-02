@@ -5,6 +5,7 @@
 #   bash vm/go.sh check    # preflight only
 #   bash vm/go.sh local    # fallback: run the app on this VM and open it in the VM's browser
 #   bash vm/go.sh warm     # precompute the demo (coverage grid + verdicts) inside the pod
+#   bash vm/go.sh url      # print the in-event and public (Cloudflare tunnel) links
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -17,9 +18,22 @@ fi
 source vm/env.sh
 
 mode="${1:-deploy}"
-if [[ "$mode" != "warm" ]]; then
-  python3 vm/preflight.py
-fi
+case "$mode" in
+  warm|url) ;;
+  *) python3 vm/preflight.py ;;
+esac
+
+wait_healthy() {  # wait_healthy <label> <url>: poll <url>/health for up to ~2 minutes
+  local code=""
+  echo "== waiting for $2/health"
+  for _ in $(seq 1 24); do
+    code="$(curl -s -o /dev/null -w '%{http_code}' "$2/health" || true)"
+    [[ "$code" == "200" ]] && { echo "✅ $1: $2"; return 0; }
+    sleep 5
+  done
+  echo "⚠️  $2 not healthy yet (last HTTP $code). Logs: $KUBECTL -n $USERNAME logs deploy/$APP_NAME"
+  return 1
+}
 
 case "$mode" in
   check)
@@ -49,6 +63,12 @@ case "$mode" in
     echo "== precomputing the demo inside the pod (takes a few minutes)"
     "$KUBECTL" -n "$USERNAME" exec deploy/"$APP_NAME" -- python main.py --warm
     ;;
+  url)
+    turl="$("$KUBECTL" -n "$USERNAME" logs deploy/"$APP_NAME-tunnel" 2>/dev/null \
+      | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1)"
+    echo "in-event: $(cat .app-url 2>/dev/null || echo unknown)"
+    echo "public:   ${turl:-none (run: bash vm/go.sh)}"
+    ;;
   *)
     # vm/READY is committed only once the app has been tested, so a half-built snapshot never deploys.
     if [[ ! -f vm/READY || ! -f deploy/deploy.sh ]]; then
@@ -66,15 +86,7 @@ case "$mode" in
       echo "❌ Kubernetes deploy failed. Fallback for the demo: bash vm/go.sh local"
       exit 1
     }
-    if [[ -f .app-url ]]; then
-      url="$(cat .app-url)"
-      echo "== waiting for $url/health"
-      for _ in $(seq 1 40); do
-        code="$(curl -s -o /dev/null -w '%{http_code}' "$url/health" || true)"
-        [[ "$code" == "200" ]] && { echo "✅ LIVE: $url"; exit 0; }
-        sleep 5
-      done
-      echo "⚠️  $url not healthy yet (last HTTP $code). Logs: $KUBECTL -n $USERNAME logs deploy/$APP_NAME"
-    fi
+    [[ -f .app-url ]] && wait_healthy "LIVE (event network)" "$(cat .app-url)"
+    [[ -f .tunnel-url ]] && wait_healthy "PUBLIC (share this)" "$(cat .tunnel-url)"
     ;;
 esac

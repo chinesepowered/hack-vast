@@ -218,6 +218,8 @@
 const BASE = location.pathname.endsWith('/') ? location.pathname : location.pathname + '/';
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+// Clip URLs from the API are relative (api/clip?...): resolve them against the app's base path.
+const media = (u) => (u && !/^([a-z]+:)?\/\//i.test(u) && !u.startsWith('/') ? BASE + u : u);
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const sameText = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 const vkey = (scenario, source) => String(scenario || '').trim().toLowerCase().replace(/\s+/g, ' ') + '\u0000' + source;
@@ -487,7 +489,7 @@ function mediaHTML(c) {
   if (c.stream_url) {
     return `<div class="video-shell relative aspect-video overflow-hidden">
       <div class="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-1 text-ink2">${ICON.play}<span class="text-[11px]">hover or click to play</span></div>
-      <video class="relative h-full w-full bg-transparent object-contain" controls muted preload="none" playsinline src="${esc(c.stream_url)}"></video></div>`;
+      <video class="relative h-full w-full bg-transparent object-contain" controls muted preload="none" playsinline src="${esc(media(c.stream_url))}"></video></div>`;
   }
   const icon = c.capture_type === 'warehouse' ? '<path d="M3 21V9l9-5 9 5v12M7 21v-7h10v7M7 17h10"/>'
     : c.location === 'indoor' ? '<path d="M4 21V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v16M9 21v-5h6v5M8 7h2M14 7h2M8 11h2M14 11h2"/>'
@@ -580,7 +582,7 @@ function showContext(card, c, side) {
   if (!seg) return;
   for (const b of $$('.ctx [data-ctx]', card)) b.setAttribute('aria-pressed', String(b.dataset.ctx === side));
   const video = $('video', card);  // may be gone if playback failed; the caption still switches
-  if (video && seg.stream_url) { video.src = seg.stream_url; video.play().catch(() => {}); }
+  if (video && seg.stream_url) { video.src = media(seg.stream_url); video.play().catch(() => {}); }
   const prefix = side === 'prev' ? `Before (${span(seg)}): ` : side === 'next' ? `After (${span(seg)}): ` : '';
   $('.caption', card).textContent = prefix + (seg.caption || 'No caption');
 }

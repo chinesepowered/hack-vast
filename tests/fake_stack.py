@@ -94,11 +94,19 @@ class Handler(BaseHTTPRequestHandler):
                 if qs.get("token", [""])[0] != TOKEN:
                     return self.send_json({"detail": "unauthorized"}, 401)
                 data = open(CLIP, "rb").read()
-                self.send_response(200)
-                self.send_header("Content-Type", "video/mp4")
-                self.send_header("Content-Length", str(len(data)))
+                status, first, last = 200, 0, len(data) - 1
+                ranged = re.match(r"bytes=(\d+)-(\d*)", self.headers.get("Range", ""))
+                if ranged:
+                    status, first = 206, int(ranged.group(1))
+                    last = min(int(ranged.group(2) or last), last)
+                self.send_response(status)
+                self.send_header("Content-Type", "binary/octet-stream")  # what the live backend sends
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Content-Length", str(last - first + 1))
+                if ranged:
+                    self.send_header("Content-Range", f"bytes {first}-{last}/{len(data)}")
                 self.end_headers()
-                return self.wfile.write(data)
+                return self.wfile.write(data[first:last + 1])
             if not self.authed():
                 return self.send_json({"detail": "unauthorized"}, 401)
             if url.path == "/api/v1/metadata/values":
@@ -119,7 +127,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"data": [{"id": "nvidia/cosmos3-reason"}]})
         if self.service == "wandb" and url.path in ("/models", "/v1/models"):
             return self.send_json({"data": [{"id": "meta-llama/Llama-3.1-8B-Instruct"},
-                                            {"id": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B"}]})
+                                            {"id": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B"},
+                                            {"id": "deepseek-ai/DeepSeek-V4-Pro-0813"},
+                                            {"id": "Qwen/Qwen3.8-27B"}]})
         return self.send_json({"detail": "not found"}, 404)
 
     def do_POST(self):

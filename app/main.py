@@ -26,9 +26,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
+from urllib.parse import quote
+
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 import cosmos
 import llm
@@ -101,7 +104,8 @@ COVERAGE_FILE = CACHE_DIR / "coverage.json"
 VSS = vss.VSSClient(env("VSS_URL", "INGRESS_URL"), env("VSS_USERNAME", "USERNAME"),
                     env("VSS_PASSWORD", "PASSWORD"), env("PUBLIC_VSS_URL"))
 LLM = llm.LLMClient(WANDB_KEY, env("WANDB_INFERENCE_URL", default=llm.DEFAULT_INFERENCE_URL),
-                    WANDB_ENTITY, WANDB_PROJECT, env("LLM_MODEL"))
+                    WANDB_ENTITY, WANDB_PROJECT, env("LLM_MODEL"),
+                    expand_model=env("LLM_EXPAND_MODEL"), judge_model=env("LLM_JUDGE_MODEL"))
 COSMOS = cosmos.CosmosClient(env("COSMOS3_REASON_URL"), env("GPU_BEARER_TOKEN"), env("COSMOS3_REASON_MODEL"))
 TAXONOMY: list[dict] = json.loads((HERE / "taxonomy.json").read_text())
 
@@ -224,13 +228,21 @@ async def lookup(source: str) -> dict | None:
     return hit
 
 
+def clip_url(source: str | None) -> str | None:
+    """Playback URL relative to the page: /api/clip relays the video, so the JWT stays server-side
+    and clips play wherever the app is reachable (Ingress, public tunnel, localhost)."""
+    if MOCK or not source:
+        return None
+    return f"api/clip?source={quote(source, safe='')}"
+
+
 def with_stream(candidate: dict) -> dict:
-    """Add browser playback URLs (built per response: they embed the current JWT, never cached)."""
+    """Add browser playback URLs to a candidate and its before/after context segments."""
     out = dict(candidate)
-    out["stream_url"] = None if MOCK else VSS.stream_url(candidate["source"])
+    out["stream_url"] = clip_url(candidate["source"])
     context = candidate.get("context")
     if isinstance(context, dict):
-        out["context"] = {side: ({**seg, "stream_url": None if MOCK else VSS.stream_url(seg["source"])}
+        out["context"] = {side: ({**seg, "stream_url": clip_url(seg["source"])}
                                  if isinstance(seg, dict) and seg.get("source") else None)
                           for side, seg in context.items()}
     return out
@@ -248,7 +260,7 @@ async def expand(scenario: str) -> dict:
     """Scenario → caption-style search queries (W&B Inference LLM; templates as fallback)."""
     if MOCK:
         return {"queries": mock.expand(scenario), "model": "mock-templates", "fallback": False}
-    key = JsonCache.key("expand", scenario.lower(), env("LLM_MODEL"))
+    key = JsonCache.key("expand", scenario.lower(), await LLM.model("expand") or "")
     cached = EXPAND_CACHE.get(key)
     if cached:
         return cached
@@ -360,7 +372,7 @@ def models_used() -> dict:
     return {
         "search": "VSS hybrid search (Cosmos-Embed1 text + visual vectors in VastDB)",
         "captions": "Cosmos3-Reason (ingest captions)",
-        "verifier": COSMOS.model_name or (f"caption judge ({LLM.model_name})" if LLM.model_name else None),
+        "verifier": COSMOS.model_name or (f"caption judge ({LLM.judge_model_name})" if LLM.judge_model_name else None),
         "query_expansion": LLM.model_name or "templates",
     }
 
@@ -772,7 +784,8 @@ async def api_config() -> dict:
         "vss": {"configured": VSS.configured, "ok": VSS.ok, "error": VSS.last_error},
         "cosmos": {"configured": COSMOS.configured, "model": COSMOS.model_name, "error": COSMOS.last_error,
                    "transcode": cosmos.ffmpeg_exe() is not None},
-        "llm": {"configured": LLM.configured, "model": LLM.model_name, "error": LLM.last_error},
+        "llm": {"configured": LLM.configured, "model": LLM.model_name, "judge_model": LLM.judge_model_name,
+                "error": LLM.last_error},
         "weave": llm.WEAVE_ENABLED,
         "wandb": bool(WANDB_KEY) and llm.wandb_installed(),
         "probing": PROBE is not None and not PROBE.done(),
@@ -788,6 +801,31 @@ async def api_taxonomy() -> dict:
 @app.get("/api/locations")
 async def api_locations() -> dict:
     return {"locations": [loc for loc in await known_locations() if loc != UNKNOWN]}
+
+
+@app.get("/api/clip")
+async def api_clip(source: str, request: Request) -> StreamingResponse:
+    """Relay one segment's video from VSS, passing Range through so the player can seek."""
+    if MOCK:
+        raise AppError(404, "No footage in mock mode")
+    require_vss()
+    # Only clips this app has surfaced (or VSS knows): not an open proxy into the bucket.
+    if not source.startswith("s3://") or not await lookup(source):
+        raise AppError(404, "Unknown clip")
+    upstream = await VSS.open_stream(source, request.headers.get("range"))
+    if upstream.status_code not in (200, 206):
+        await upstream.aclose()
+        raise AppError(502, f"Clip unavailable (HTTP {upstream.status_code})")
+    headers = {k: upstream.headers[k] for k in ("content-length", "content-range", "accept-ranges")
+               if k in upstream.headers}
+    if "content-encoding" in upstream.headers:
+        headers.pop("content-length", None)
+    headers.setdefault("accept-ranges", "bytes")
+    headers["cache-control"] = "private, max-age=3600"
+    # VSS labels clips binary/octet-stream; say what they are so every browser plays them inline.
+    return StreamingResponse(upstream.aiter_bytes(), status_code=upstream.status_code,
+                             media_type="video/mp4", headers=headers,
+                             background=BackgroundTask(upstream.aclose))
 
 
 @app.post("/api/mine")

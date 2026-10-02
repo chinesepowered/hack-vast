@@ -251,13 +251,16 @@ def main():
             headers["OpenAI-Project"] = f"{team}/{project}"
         status, data, _, dt = http("GET", f"{WANDB_INFERENCE_URL}/models", headers=headers, timeout=30)
         ids = [m.get("id") for m in (data.get("data", []) if isinstance(data, dict) else [])]
-        nemotron = [i for i in ids if "nemotron" in (i or "").lower()]
-        out(f"   /models HTTP {status} ({dt:.1f}s): {len(ids)} models; nemotron: {nemotron}")
+        out(f"   /models HTTP {status} ({dt:.1f}s): {len(ids)} models")
         if status != 200:
             out(f"   ❌ {summarize(data, 200)}")
             return
-        model = os.environ.get("LLM_MODEL") or (nemotron[0] if nemotron else (ids[0] if ids else ""))
-        # Same call shape as the app: Nemotron reasons by default, "/no_think" turns that off.
+        out(f"   ids: {', '.join(sorted(ids))}")
+        # Same preference order as app/llm.py MODEL_PREFS["expand"].
+        model = os.environ.get("LLM_MODEL") or next(
+            (i for pref in ("qwen3.8", "deepseek-v4", "qwen3", "nemotron") for i in ids if pref in i.lower()),
+            ids[0] if ids else "")
+        # Same call shape as the app: Qwen3 / Nemotron think by default, "/no_think" turns that off.
         body = {"model": model, "max_tokens": 300, "temperature": 0,
                 "messages": [{"role": "system", "content": "/no_think"},
                              {"role": "user", "content": 'Reply with JSON {"ok": true} and nothing else.'}]}

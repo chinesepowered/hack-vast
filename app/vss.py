@@ -434,6 +434,29 @@ class VSSClient:
         return (f"{base}/api/v1/videos/stream?source={quote(source, safe='')}"
                 f"&token={quote(self._token, safe='')}")
 
+    async def open_stream(self, source: str, range_header: str | None = None) -> httpx.Response:
+        """Open /videos/stream for relaying to a browser, passing Range through so seeking works.
+
+        Returns a streaming response; the caller must ``aclose()`` it.
+        """
+        token = await self.login()
+        for attempt in (0, 1):
+            request = self._http().build_request(
+                "GET", f"{self.base}/api/v1/videos/stream", params={"source": source, "token": token},
+                headers={"Range": range_header} if range_header else None)
+            try:
+                resp = await self._http().send(request, stream=True)
+            except httpx.TimeoutException:
+                raise VSSError("clip stream timed out", 504) from None
+            except httpx.HTTPError as exc:
+                raise VSSError(f"clip stream failed ({type(exc).__name__})", 502) from None
+            if resp.status_code == 401 and attempt == 0:
+                await resp.aclose()
+                token = await self.login(stale=token)
+                continue
+            return resp
+        raise VSSError("clip stream unauthorized", 502)
+
     async def download_clip(self, source: str, max_bytes: int = MAX_CLIP_BYTES) -> bytes:
         """Fetch a segment's bytes server-side via /videos/stream (capped at ``max_bytes``)."""
         token = await self.login()

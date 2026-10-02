@@ -16,6 +16,7 @@ venv/
 # generated at runtime
 preflight-report.txt
 .app-url
+.tunnel-url
 .cache/
 ecm-cache/
 *.mp4

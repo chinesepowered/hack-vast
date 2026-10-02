@@ -221,8 +221,53 @@ EOF
 
 APP_URL="http://${APP_HOST}${APP_PATH}"
 echo "$APP_URL" > "$REPO_ROOT/.app-url" 2>/dev/null || true
+
+# 5. Public HTTPS link via a Cloudflare quick tunnel (no account needed). It points at this app's
+#    Service only, never at the VSS backend. Re-applying an unchanged spec doesn't restart the
+#    tunnel pod, so the random *.trycloudflare.com URL survives app redeploys. TUNNEL=0 skips it.
+TUNNEL_URL=""
+if [[ "${TUNNEL:-1}" == "1" ]]; then
+  echo "== public tunnel"
+  "$KUBECTL" -n "$NS" apply -f - <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ${APP_NAME}-tunnel
+  labels:
+    app: ${APP_NAME}-tunnel
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ${APP_NAME}-tunnel
+  template:
+    metadata:
+      labels:
+        app: ${APP_NAME}-tunnel
+    spec:
+      containers:
+      - name: cloudflared
+        image: cloudflare/cloudflared:latest
+        args: ["tunnel", "--no-autoupdate", "--protocol", "http2", "--url", "http://${APP_NAME}:80"]
+EOF
+  "$KUBECTL" -n "$NS" rollout status deploy/"${APP_NAME}-tunnel" --timeout=300s || true
+  for _ in $(seq 1 30); do
+    TUNNEL_URL="$("$KUBECTL" -n "$NS" logs deploy/"${APP_NAME}-tunnel" 2>/dev/null \
+      | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1 || true)"
+    [[ -n "$TUNNEL_URL" ]] && break
+    sleep 4
+  done
+  if [[ -n "$TUNNEL_URL" ]]; then
+    echo "$TUNNEL_URL" > "$REPO_ROOT/.tunnel-url" 2>/dev/null || true
+  else
+    rm -f "$REPO_ROOT/.tunnel-url"
+    echo "WARN: no tunnel URL yet; check: $KUBECTL -n $NS logs deploy/${APP_NAME}-tunnel" >&2
+  fi
+fi
+
 echo
 echo "== Edge-Case Miner is live: $APP_URL"
+[[ -n "$TUNNEL_URL" ]] && echo "   public:  $TUNNEL_URL   (share this one: works outside the event network)"
 echo "   health:  $APP_URL/health"
 echo "   logs:    $KUBECTL -n $NS logs deploy/$APP_NAME"
 echo "   warm-up: $KUBECTL -n $NS exec deploy/$APP_NAME -- python main.py --warm   (or 'Warm cache' in the Coverage tab)"

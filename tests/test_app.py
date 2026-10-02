@@ -109,6 +109,11 @@ def test_query_parsing_and_model_pick():
     assert llm._clean_queries(llm._queries_from_text('{"queries": ["a b c", "1. d e f", "A B C"]}'), 4) == ["a b c", "d e f"]
     assert llm._clean_queries(llm._queries_from_text("1. car brakes hard\n2) truck merges"), 4) == ["car brakes hard", "truck merges"]
     assert llm.pick_model(["meta/llama", "nvidia/NVIDIA-Nemotron-X", "nvidia/nemotron-embed"]) == "nvidia/NVIDIA-Nemotron-X"
+    live = ["meta-llama/Llama-3.3-70B-Instruct", "deepseek-ai/DeepSeek-V4.1-Flash", "deepseek-ai/DeepSeek-V4-Pro-0813",
+            "Qwen/Qwen3.8-27B", "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B"]
+    assert llm.pick_model(live, llm.MODEL_PREFS["expand"]) == "Qwen/Qwen3.8-27B"
+    assert llm.pick_model(live, llm.MODEL_PREFS["judge"]) == "deepseek-ai/DeepSeek-V4-Pro-0813"
+    assert llm.pick_model(["meta/llama"], llm.MODEL_PREFS["judge"]) == "meta/llama"
     assert llm.fallback_queries("pedestrian crossing at night")[0] == "pedestrian crossing at night"
 
 
