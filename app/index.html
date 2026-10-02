@@ -104,12 +104,13 @@
         </summary>
         <div class="grid gap-5 px-3 pb-4 pt-2 sm:grid-cols-2 lg:grid-cols-4">
           <div>
-            <div class="flex items-center justify-between"><label for="minSim" class="label">Min similarity</label><span id="minSimVal" class="text-xs text-ink2 tabular">0.30</span></div>
-            <input id="minSim" type="range" min="0.05" max="0.9" step="0.05" value="0.3" class="mt-2 w-full">
+            <div class="flex items-center justify-between"><label for="minSim" class="label">Min similarity</label><span id="minSimVal" class="text-xs text-ink2 tabular">0.12</span></div>
+            <input id="minSim" type="range" min="0.05" max="0.5" step="0.01" value="0.12" class="mt-2 w-full">
+            <div class="text-[11px] text-muted">hybrid scores run low (~0.3 is a strong hit); verification filters</div>
           </div>
           <div>
             <label for="topK" class="label">Candidates (top_k)</label>
-            <input id="topK" type="number" min="5" max="100" value="25" class="field mt-1.5 tabular">
+            <input id="topK" type="number" min="5" max="100" value="30" class="field mt-1.5 tabular">
           </div>
           <div>
             <div class="flex items-center justify-between">
@@ -337,7 +338,7 @@ async function loadConfig() {
 // ------------------------------------------------------------------ mine
 function readOptions() {
   return {
-    top_k: Math.max(1, Math.min(100, parseInt($('#topK').value, 10) || 25)),
+    top_k: Math.max(1, Math.min(100, parseInt($('#topK').value, 10) || 30)),
     min_similarity: Number($('#minSim').value),
     hybrid_text_weight: $('#weightDefault').checked ? null : Math.round((1 - Number($('#weight').value) / 100) * 100) / 100,
     location: $('#location').value || null,
@@ -496,10 +497,26 @@ function mediaHTML(c) {
     <div class="text-xs text-ink2">${meta}</div></div>`;
 }
 
+function yoloTag(c) {
+  const counts = c.object_counts && Object.keys(c.object_counts).length
+    ? Object.entries(c.object_counts) : (c.objects || []).map((o) => [o, null]);
+  if (!counts.length) return '';
+  const text = counts.slice(0, 4).map(([o, n]) => (n ? `${o} ×${n}` : o)).join(' · ');
+  return `<span class="tag" title="YOLO11 detections in this clip"><span class="font-semibold text-muted">YOLO</span>${esc(text)}</span>`;
+}
+
+function contextHTML(c) {
+  const ctx = c.context;
+  if (!c.stream_url || !ctx || !(ctx.prev || ctx.next)) return '';
+  const btn = (side, label, seg) => `<button type="button" class="seg !px-2 !py-0.5" data-ctx="${side}" aria-pressed="${side === 'hit'}" ${side !== 'hit' && !(seg && seg.stream_url) ? 'disabled' : ''} title="${esc(seg ? `${span(seg)} ${seg.caption || ''}` : '')}">${label}</button>`;
+  return `<div class="ctx flex items-center gap-1"><span class="mr-1 text-[11px] text-muted">Context</span>
+    ${btn('prev', '◀ before', ctx.prev)}${btn('hit', 'hit', c)}${btn('next', 'after ▶', ctx.next)}</div>`;
+}
+
 function cardHTML(c, i) {
   const v = state.view;
   const inDs = inDataset(c.source, v.scenario);
-  const objs = (c.objects || []).slice(0, 4).map((o) => `<span class="tag">${esc(o)}</span>`).join('');
+  const objs = yoloTag(c);
   const matched = (c.matched_queries || []).length;
   return `<article class="panel flex flex-col overflow-hidden transition" data-idx="${i}">
     <div class="relative">${mediaHTML(c)}
@@ -512,6 +529,7 @@ function cardHTML(c, i) {
         <span class="tag">${ICON.cam}${esc(c.camera_id || 'unknown camera')}</span>
         ${span(c) ? `<span class="tag tabular">${ICON.clock}${esc(span(c))}</span>` : ''}${objs}
       </div>
+      ${contextHTML(c)}
       <p class="caption clamp-3 text-[13px] leading-snug text-ink2">${esc(c.caption || 'No caption')}</p>
       ${(c.caption || '').length > 150 ? '<button type="button" class="more self-start text-[11px] font-medium text-accent hover:underline">Show more</button>' : ''}
       <div class="why"></div>
@@ -550,8 +568,21 @@ function renderResults() {
     $('.raw', card).onclick = () => showRaw(c, `candidate · ${c.source}`);
     const more = $('.more', card);
     if (more) more.onclick = () => { const p = $('.caption', card); const open = p.classList.toggle('clamp-3'); more.textContent = open ? 'Show more' : 'Show less'; };
+    for (const b of $$('.ctx [data-ctx]', card)) b.onclick = () => showContext(card, c, b.dataset.ctx);
   }
   applyFilter();
+}
+
+// Before / after: swap the player to the neighbouring 5 s segment of the same parent video.
+function showContext(card, c, side) {
+  const seg = side === 'hit' ? c : (c.context || {})[side];
+  const video = $('video', card);
+  if (!seg || !seg.stream_url || !video) return;
+  for (const b of $$('.ctx [data-ctx]', card)) b.setAttribute('aria-pressed', String(b.dataset.ctx === side));
+  video.src = seg.stream_url;
+  video.play().catch(() => {});
+  const prefix = side === 'prev' ? `Before (${span(seg)}): ` : side === 'next' ? `After (${span(seg)}): ` : '';
+  $('.caption', card).textContent = prefix + (seg.caption || 'No caption');
 }
 
 function updateCard(i) {
@@ -827,10 +858,10 @@ async function loadCoverage(refresh = false) {
 function covCell(cell, label, loc, max) {
   const shade = cell.hits ? 0.12 + 0.58 * Math.sqrt(cell.hits / max) : 0;
   const style = cell.gap ? 'background:rgba(208,59,59,.13);box-shadow:inset 0 0 0 1px rgba(208,59,59,.6)' : `background:rgba(37,106,191,${shade.toFixed(3)})`;
-  const tip = `${label} · ${loc ? prettyLoc(loc) : 'all cameras'}: ${cell.hits} search hits; ${cell.verified_total ? `${cell.verified_matches} of ${cell.verified_total} verified clips match` : 'nothing verified yet'}${cell.gap ? ' · GAP' : ''}. Click to mine.`;
+  const tip = `${label} · ${loc ? prettyLoc(loc) : 'all cameras'}: ${cell.hits} strong search hits; ${cell.verified_total ? `${cell.verified_matches} of ${cell.verified_total} verified clips match` : 'nothing verified yet'}${cell.gap ? ' · GAP' : ''}. Click to mine.`;
   const verified = cell.verified_total
     ? `<div class="text-[11px] text-ink2 tabular"><span class="text-good">✓</span> ${cell.verified_matches}/${cell.verified_total}</div>`
-    : '<div class="text-[11px] text-muted">unverified</div>';
+    : `<div class="text-[11px] text-muted">${cell.gap ? 'no hits' : 'unverified'}</div>`;
   const gap = cell.gap ? `<div class="mt-0.5 inline-flex items-center gap-1 text-[10px] font-bold tracking-wider text-ink">${ICON.warn}GAP</div>` : '';
   return `<button type="button" class="cov-cell flex h-full min-h-[64px] w-full flex-col items-start justify-center rounded-lg px-2.5 py-2 text-left transition hover:ring-2 hover:ring-accent" style="${style}" title="${esc(tip)}" data-loc="${esc(loc || '')}">
     <div class="text-base font-semibold leading-none tabular">${cell.hits}<span class="ml-1 text-[10px] font-normal text-ink2">hits</span></div>${verified}${gap}</button>`;
@@ -844,14 +875,15 @@ function renderCoverage() {
   const maxTotal = Math.max(1, ...cv.scenarios.map((t) => (cv.totals[t.id] || {}).hits || 0));
   const s = cv.summary || {};
   const tile = (label, value, sub) => `<div class="tile"><div class="label">${label}</div><div class="mt-1 text-3xl font-semibold tracking-tight">${value}</div><div class="mt-1 text-xs text-ink2">${sub}</div></div>`;
+  const hitSim = cv.params && cv.params.hit_similarity != null ? Number(cv.params.hit_similarity).toFixed(2) : '0.20';
   $('#covSummary').innerHTML = [
-    tile('Gap cells', `${s.gaps}<span class="text-lg text-muted">/${s.cells}</span>`, 'scenario × location with no (verified) footage'),
+    tile('Gap cells', `${s.gaps}<span class="text-lg text-muted">/${s.cells}</span>`, s.unverified ? `${s.unverified} more cells unverified: press Warm cache` : 'scenario × location with no verified footage'),
     tile('Scenarios missing everywhere', s.scenario_gaps, 'no verified clip on any camera'),
-    tile('Verified clips', s.verified, `${s.verified_matches} confirmed matches`),
+    tile('Verified clips', s.verified, `${s.verified_matches} confirmed matches · ${s.covered || 0} cells covered`),
     tile('Locations', locs.length, `${cv.scenarios.length} scenarios · top ${cv.params ? cv.params.top_k : 100} hits each`),
   ].join('');
   $('#covLegend').innerHTML = `
-    <span class="inline-flex items-center gap-2"><span class="h-3 w-24 rounded" style="background:linear-gradient(90deg,rgba(37,106,191,.12),rgba(37,106,191,.7))"></span>search hits (more = stronger)</span>
+    <span class="inline-flex items-center gap-2"><span class="h-3 w-24 rounded" style="background:linear-gradient(90deg,rgba(37,106,191,.12),rgba(37,106,191,.7))"></span>search hits with similarity ≥ ${hitSim}</span>
     <span class="inline-flex items-center gap-1.5"><span class="text-good">✓</span> m/n = verified matches / clips verified</span>
     <span class="inline-flex items-center gap-1.5"><span class="h-3 w-5 rounded" style="background:rgba(208,59,59,.13);box-shadow:inset 0 0 0 1px rgba(208,59,59,.6)"></span>${ICON.warn}GAP = 0 verified matches (or 0 hits if unverified)</span>
     ${cv.generated_at ? `<span class="ml-auto text-muted">searched ${new Date(cv.generated_at * 1000).toLocaleString()}</span>` : ''}`;

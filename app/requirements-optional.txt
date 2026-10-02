@@ -1,0 +1,4 @@
+# Optional: every import of these is guarded; the app runs without them.
+weave
+wandb
+imageio-ffmpeg

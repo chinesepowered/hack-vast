@@ -66,8 +66,13 @@ MAX_VERIFY = max(1, env_int("MAX_VERIFY", 24))
 VERIFY_CONCURRENCY = max(1, env_int("VERIFY_CONCURRENCY", 6))
 SEARCH_CACHE_TTL = env_int("SEARCH_CACHE_TTL", 6 * 3600)
 SEARCH_CONCURRENCY = 4  # the stock VSS backend runs 4 workers; leave room for the team's other users
+# Hybrid similarity on the live index is low (the best hit for a clear query scores ~0.3), so search
+# wide and let Cosmos verification do the filtering.
+DEFAULT_MIN_SIM = 0.12
+DEFAULT_TOP_K = 30
 COVERAGE_TOP_K = 100
-DEFAULT_MIN_SIM = 0.3
+COVERAGE_MIN_SIM = 0.12   # what the coverage search fetches (all of it is eligible for verification)
+COVERAGE_HIT_SIM = 0.2    # what a coverage cell counts as a "hit"
 UNKNOWN = "(unknown)"
 WANDB_KEY = env("WANDB_API_KEY")
 WANDB_ENTITY = env("WANDB_TEAM", "WANDB_ENTITY")
@@ -220,8 +225,14 @@ async def lookup(source: str) -> dict | None:
 
 
 def with_stream(candidate: dict) -> dict:
+    """Add browser playback URLs (built per response: they embed the current JWT, never cached)."""
     out = dict(candidate)
     out["stream_url"] = None if MOCK else VSS.stream_url(candidate["source"])
+    context = candidate.get("context")
+    if isinstance(context, dict):
+        out["context"] = {side: ({**seg, "stream_url": None if MOCK else VSS.stream_url(seg["source"])}
+                                 if isinstance(seg, dict) and seg.get("source") else None)
+                          for side, seg in context.items()}
     return out
 
 
@@ -248,7 +259,7 @@ async def expand(scenario: str) -> dict:
 
 
 @llm.op
-async def search(query: str, top_k: int = 25, min_similarity: float = DEFAULT_MIN_SIM,
+async def search(query: str, top_k: int = DEFAULT_TOP_K, min_similarity: float = DEFAULT_MIN_SIM,
                  location: Optional[str] = None, hybrid_text_weight: Optional[float] = None,
                  fresh: bool = False) -> list:
     """One hybrid (caption text + visual embedding) search across every camera."""
@@ -302,7 +313,7 @@ async def _search_all(queries: list[str], top_k: int, min_similarity: float, loc
 
 
 @llm.op
-async def mine(scenario: str, top_k: int = 25, min_similarity: float = DEFAULT_MIN_SIM,
+async def mine(scenario: str, top_k: int = DEFAULT_TOP_K, min_similarity: float = DEFAULT_MIN_SIM,
                hybrid_text_weight: Optional[float] = None, location: Optional[str] = None,
                fresh: bool = False) -> dict:
     """Expand the scenario, search every query concurrently, merge into ranked candidates."""
@@ -316,8 +327,8 @@ async def mine(scenario: str, top_k: int = 25, min_similarity: float = DEFAULT_M
     per_query, errors = await _search_all(queries, top_k, min_similarity, location, hybrid_text_weight, fresh)
     candidates = merge_hits(per_query)
     used_min_sim = min_similarity
-    if not candidates and not errors and min_similarity > 0.15:
-        used_min_sim = round(max(0.1, min_similarity / 2), 2)
+    if not candidates and not errors and min_similarity > 0.08:
+        used_min_sim = round(max(0.05, min_similarity / 2), 2)
         notes.append(f"No hits at min similarity {min_similarity:.2f}; relaxed to {used_min_sim:.2f}.")
         per_query, errors = await _search_all(queries, top_k, used_min_sim, location, hybrid_text_weight, fresh)
         candidates = merge_hits(per_query)
@@ -473,7 +484,7 @@ async def known_locations(hits_by_scenario: dict | None = None) -> list[str]:
 
 def _compact(hit: dict) -> dict:
     keep = ("source", "original_video", "camera_id", "location", "capture_type", "start_sec", "end_sec",
-            "similarity", "objects")
+            "similarity", "objects", "object_counts")
     return {**{k: hit.get(k) for k in keep}, "caption": (hit.get("caption") or "")[:1500]}
 
 
@@ -497,7 +508,7 @@ async def coverage_base(refresh: bool = False) -> dict:
                 return COVERAGE
         t0 = time.perf_counter()
         results = await asyncio.gather(
-            *(search(t["query"], COVERAGE_TOP_K, DEFAULT_MIN_SIM, None, None, refresh) for t in TAXONOMY),
+            *(search(t["query"], COVERAGE_TOP_K, COVERAGE_MIN_SIM, None, None, refresh) for t in TAXONOMY),
             return_exceptions=True)
         hits: dict[str, list] = {}
         errors: dict[str, str] = {}
@@ -513,7 +524,7 @@ async def coverage_base(refresh: bool = False) -> dict:
         COVERAGE = {
             "generated_at": time.time(),
             "elapsed_ms": _ms(t0),
-            "params": {"top_k": COVERAGE_TOP_K, "min_similarity": DEFAULT_MIN_SIM},
+            "params": {"top_k": COVERAGE_TOP_K, "min_similarity": COVERAGE_MIN_SIM, "hit_similarity": COVERAGE_HIT_SIM},
             "locations": await known_locations(hits),
             "hits": hits,
             "errors": errors,
@@ -528,13 +539,14 @@ async def coverage_base(refresh: bool = False) -> dict:
 
 def _cell(hits: int, matches: int, verified: int) -> dict:
     gap = (matches == 0) if verified else (hits == 0)
-    return {"hits": hits, "verified_matches": matches, "verified_total": verified, "gap": gap}
+    status = "covered" if matches else "gap" if gap else "unverified"
+    return {"hits": hits, "verified_matches": matches, "verified_total": verified, "gap": gap, "status": status}
 
 
 def coverage_view(base: dict) -> dict:
-    """Grid cells: search hits per location + verified counts from the verdict cache.
-
-    A cell is a GAP when verified_matches == 0 if anything there was verified, else when hits == 0.
+    """Grid cells: search hits (similarity ≥ COVERAGE_HIT_SIM) per location + verified counts from the
+    verdict cache. A cell is a GAP when verified_matches == 0 if anything there was verified, else when
+    hits == 0; cells with hits but no verdicts yet are "unverified" (Warm cache verifies them).
     """
     locations = list(base.get("locations") or [])
     cells: dict[str, dict] = {}
@@ -554,7 +566,8 @@ def coverage_view(base: dict) -> dict:
         sid = entry["id"]
         by_loc: dict[str, set] = {}
         for hit in base.get("hits", {}).get(sid, []):
-            by_loc.setdefault(hit.get("location") or UNKNOWN, set()).add(hit["source"])
+            if (hit.get("similarity") or 0) >= COVERAGE_HIT_SIM:
+                by_loc.setdefault(hit.get("location") or UNKNOWN, set()).add(hit["source"])
         row = {}
         for loc in locations:
             vs = per_scenario_verdicts[sid].get(loc, [])
@@ -572,6 +585,8 @@ def coverage_view(base: dict) -> dict:
         "summary": {
             "cells": len(TAXONOMY) * len(locations),
             "gaps": gaps,
+            "unverified": sum(1 for row in cells.values() for c in row.values() if c["status"] == "unverified"),
+            "covered": sum(1 for row in cells.values() for c in row.values() if c["status"] == "covered"),
             "scenario_gaps": sum(1 for t in totals.values() if t["gap"]),
             "verified": sum(t["verified_total"] for t in totals.values()),
             "verified_matches": sum(t["verified_matches"] for t in totals.values()),
@@ -702,7 +717,7 @@ async def _unexpected(_request: Request, exc: Exception) -> JSONResponse:
 
 class MineRequest(BaseModel):
     scenario: str = Field(..., min_length=2, max_length=300)
-    top_k: int = Field(25, ge=1, le=100)
+    top_k: int = Field(DEFAULT_TOP_K, ge=1, le=100)
     min_similarity: float = Field(DEFAULT_MIN_SIM, ge=0.0, le=1.0)
     hybrid_text_weight: Optional[float] = Field(None, ge=0.0, le=1.0)
     location: Optional[str] = Field(None, max_length=200)
@@ -717,7 +732,7 @@ class VerifyRequest(BaseModel):
 class SimilarRequest(BaseModel):
     source: str = Field(..., min_length=3)
     scenario: str = Field("", max_length=300)
-    top_k: int = Field(25, ge=1, le=100)
+    top_k: int = Field(DEFAULT_TOP_K, ge=1, le=100)
     min_similarity: float = Field(DEFAULT_MIN_SIM, ge=0.0, le=1.0)
     hybrid_text_weight: Optional[float] = Field(None, ge=0.0, le=1.0)
     location: Optional[str] = Field(None, max_length=200)
@@ -811,12 +826,18 @@ async def api_similar(req: SimilarRequest) -> dict:
         if len(query) >= 140:
             break
     query = query[:300]
-    hits = await search(query, min(100, req.top_k + 1), req.min_similarity, (req.location or "").strip() or None,
-                        req.hybrid_text_weight)
-    candidates = [{**h, "matched_queries": ["more like this"]} for h in hits if h["source"] != seed["source"]]
+    location = (req.location or "").strip() or None
+    min_sim, notes = req.min_similarity, []
+    for _attempt in (0, 1):
+        hits = await search(query, min(100, req.top_k + 1), min_sim, location, req.hybrid_text_weight)
+        candidates = [{**h, "matched_queries": [query]} for h in hits if h["source"] != seed["source"]]
+        if candidates or min_sim <= 0.08:
+            break
+        notes.append(f"No similar clips at min similarity {min_sim:.2f}; relaxed to {max(0.05, min_sim / 2):.2f}.")
+        min_sim = round(max(0.05, min_sim / 2), 2)
     return {"scenario": _norm_text(req.scenario), "seed": seed["source"], "query": query, "queries": [query],
-            "candidates": [with_stream(c) for c in candidates[: req.top_k]],
-            "timings": {"search_ms": _ms(t0), "total_ms": _ms(t0)}}
+            "candidates": [with_stream(c) for c in candidates[: req.top_k]], "notes": notes, "errors": [],
+            "min_similarity": min_sim, "timings": {"search_ms": _ms(t0), "total_ms": _ms(t0)}}
 
 
 @app.get("/api/coverage")

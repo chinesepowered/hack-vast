@@ -78,7 +78,8 @@ class CosmosClient:
 
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=httpx.Timeout(self._timeout, connect=15.0))
+            self._client = httpx.AsyncClient(timeout=httpx.Timeout(self._timeout, connect=15.0),
+                                             headers={"User-Agent": llm.USER_AGENT})
         return self._client
 
     async def aclose(self) -> None:

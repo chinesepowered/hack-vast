@@ -21,6 +21,8 @@ import httpx
 log = logging.getLogger("ecm.llm")
 
 DEFAULT_INFERENCE_URL = "https://api.inference.wandb.ai/v1"
+# W&B Inference sits behind Cloudflare, which rejects some default client User-Agents.
+USER_AGENT = "edge-case-miner/1.0"
 
 try:  # optional tracing
     import weave as _weave
@@ -347,7 +349,8 @@ class LLMClient:
 
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=httpx.Timeout(self._timeout, connect=15.0))
+            self._client = httpx.AsyncClient(timeout=httpx.Timeout(self._timeout, connect=15.0),
+                                             headers={"User-Agent": USER_AGENT})
         return self._client
 
     async def aclose(self) -> None:

@@ -1,10 +1,12 @@
 """Client for the team's VSS retrieval backend: login, hybrid search, playback URLs, clip bytes.
 
-Field names follow vss-blueprint's video-backend (``VideoSearchResult``: ``source``,
-``similarity_score``, ``reasoning_content``, ``segment_start_sec``/``segment_end_sec``,
-``camera_id``/``location``/``capture_type`` at top level), but every response is parsed
-defensively because the deployed backend may differ. Unknown values stay ``None`` and a
-trimmed ``raw`` copy of each hit is kept for the UI's debug panel.
+Live /api/v1/search rows are flat: ``source``, ``original_video``, ``similarity_score``,
+``reasoning_content``, ``segment_start_sec``/``segment_end_sec``, ``camera_id``/``location``/
+``capture_type``, ``object_classes`` ("bench,car,person") and ``object_counts`` (a JSON *string*,
+'{"car": 5, "person": 1}'). ``chunk_results[].timeline`` lists every 5 s segment of the parent
+chunk, which gives cheap before/after context. Parsing stays defensive anyway: alternative key
+names are tried, unknown values stay ``None``, and a trimmed ``raw`` copy of each row is kept for
+the UI's debug panel.
 """
 from __future__ import annotations
 
@@ -20,6 +22,7 @@ import httpx
 log = logging.getLogger("ecm.vss")
 
 MAX_CLIP_BYTES = 40 * 1024 * 1024
+USER_AGENT = "edge-case-miner/1.0"
 
 # Candidate key names, most likely first.
 SOURCE_KEYS = ("source", "segment_source", "clip_source", "s3_uri", "uri", "preview_source")
@@ -119,6 +122,17 @@ def _objects(value: Any) -> list[str]:
     return out[:8]
 
 
+def _counts(value: Any) -> dict[str, int]:
+    """YOLO object_counts: a JSON string ('{"car": 5, "person": 1}') or dict → {label: count}."""
+    parsed = _as_dict(value) or {}
+    out: dict[str, int] = {}
+    for label, count in parsed.items():
+        n = _num(count)
+        if label and n is not None and n > 0:
+            out[str(label).strip().lower()] = int(n)
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]))
+
+
 def trim_raw(value: Any, depth: int = 0) -> Any:
     """A small, JSON-safe copy of a backend row for the debug panel."""
     if isinstance(value, dict):
@@ -163,6 +177,7 @@ def normalize_hit(row: Any) -> dict | None:
     seg_no = _num(row.get("segment_number"))
     original = _first(row, ORIGINAL_KEYS)
     caption = _first(row, CAPTION_KEYS)
+    counts = _counts(row.get("object_counts"))
     return {
         "source": source.strip(),
         "original_video": str(original) if original is not None else None,
@@ -175,9 +190,35 @@ def normalize_hit(row: Any) -> dict | None:
         "segment_number": int(seg_no) if seg_no is not None else None,
         "similarity": round(sim, 4) if sim is not None else None,
         "caption": str(caption).strip() if caption is not None else "",
-        "objects": _objects(row.get("object_classes")),
+        "objects": _objects(row.get("object_classes")) or list(counts)[:8],
+        "object_counts": counts,
         "raw": trim_raw(row),
     }
+
+
+def _context_segment(seg: dict | None) -> dict | None:
+    if not seg:
+        return None
+    return {"source": str(seg["source"]), "start_sec": _num(_first(seg, START_KEYS)),
+            "end_sec": _num(_first(seg, END_KEYS)), "caption": str(_first(seg, CAPTION_KEYS) or "")[:600],
+            "object_counts": _counts(seg.get("object_counts"))}
+
+
+def attach_context(hits: list[dict], chunks: Any) -> None:
+    """Give each hit its neighbouring 5 s segments (before/after) from chunk_results[].timeline."""
+    neighbours: dict[str, tuple[dict | None, dict | None]] = {}
+    for chunk in chunks if isinstance(chunks, list) else []:
+        timeline = chunk.get("timeline") if isinstance(chunk, dict) else None
+        if not isinstance(timeline, list):
+            continue
+        segs = [s for s in timeline if isinstance(s, dict) and isinstance(s.get("source"), str)]
+        segs.sort(key=lambda s: (_num(s.get("segment_number")) or 0, _num(_first(s, START_KEYS)) or 0))
+        for i, seg in enumerate(segs):
+            neighbours[seg["source"]] = (segs[i - 1] if i > 0 else None, segs[i + 1] if i + 1 < len(segs) else None)
+    for hit in hits:
+        before, after = neighbours.get(hit["source"], (None, None))
+        if before or after:
+            hit["context"] = {"prev": _context_segment(before), "next": _context_segment(after)}
 
 
 def normalize_search(data: Any) -> tuple[list[dict], dict]:
@@ -210,6 +251,7 @@ def normalize_search(data: Any) -> tuple[list[dict], dict]:
                 hit["from_chunk"] = True
                 seen.add(hit["source"])
                 hits.append(hit)
+    attach_context(hits, chunks)
     meta = {k: data.get(k) for k in ("total", "chunk_total", "embedding_time_ms", "search_time_ms",
                                      "permission_filtered") if k in data}
     return hits, meta
@@ -250,7 +292,6 @@ class VSSClient:
         self._token: str | None = None
         self._client: httpx.AsyncClient | None = None
         self._login_lock: asyncio.Lock | None = None
-        self.llm_top_n = 0  # becomes 1 if this backend rejects 0 (its schema may say ge=1)
         self.ok: bool | None = None
         self.last_error: str | None = None
 
@@ -264,7 +305,7 @@ class VSSClient:
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(timeout=httpx.Timeout(self._timeout, connect=15.0),
-                                             follow_redirects=True)
+                                             follow_redirects=True, headers={"User-Agent": USER_AGENT})
         return self._client
 
     async def aclose(self) -> None:
@@ -337,18 +378,13 @@ class VSSClient:
             "query": query,
             "top_k": max(1, min(100, int(top_k))),
             "min_similarity": max(0.0, min(1.0, float(min_similarity))),
-            "llm_top_n": self.llm_top_n,
+            "llm_top_n": 1,  # the backend rejects 0 (422, ge=1); 1 keeps its synthesis step minimal
             "include_public": True,
             "metadata_filters": {k: v for k, v in (metadata_filters or {}).items() if v not in (None, "")},
         }
         if hybrid_text_weight is not None:
             body["hybrid_text_weight"] = max(0.0, min(1.0, float(hybrid_text_weight)))
         resp = await self._request("POST", "/api/v1/search", json=body)
-        if 400 <= resp.status_code < 500 and resp.status_code not in (401, 403, 404) and body["llm_top_n"] == 0:
-            # Backend wants llm_top_n >= 1 (it then synthesizes over 1 chunk). Remember that.
-            log.info("VSS rejected llm_top_n=0 (HTTP %s); using llm_top_n=1", resp.status_code)
-            self.llm_top_n = body["llm_top_n"] = 1
-            resp = await self._request("POST", "/api/v1/search", json=body)
         if resp.status_code != 200:
             raise VSSError(f"VSS search failed (HTTP {resp.status_code}): {_detail(resp)}", 502)
         try:

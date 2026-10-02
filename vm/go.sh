@@ -8,8 +8,12 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-echo "== updating code"
-git pull --ff-only -q 2>/dev/null || echo "   (git pull skipped)"
+if [[ -z "${GO_UPDATED:-}" ]]; then
+  echo "== updating code"
+  git pull --ff-only -q 2>/dev/null || echo "   (git pull skipped)"
+  # bash keeps reading the old copy of a script that changed under it: restart on the new one.
+  GO_UPDATED=1 exec bash "$0" "$@"
+fi
 source vm/env.sh
 
 mode="${1:-deploy}"
@@ -21,17 +25,25 @@ case "$mode" in
   check)
     ;;
   local)
-    cd app
-    python3 -m pip install -q --user -r requirements.txt 2>/dev/null \
-      || python3 -m pip install -q --user --break-system-packages -r requirements.txt
-    python3 -m pip install -q --user -r requirements-optional.txt 2>/dev/null \
-      || python3 -m pip install -q --user --break-system-packages -r requirements-optional.txt 2>/dev/null \
+    # The pool VMs ship python3 without pip: use a user-local uv to build a venv.
+    if [[ ! -x .venv/bin/python ]]; then
+      if [[ ! -x .bin/uv ]]; then
+        echo "== installing uv into .bin (one time)"
+        mkdir -p .bin
+        case "$(uname -m)" in aarch64|arm64) uv_arch=aarch64 ;; *) uv_arch=x86_64 ;; esac
+        curl -fsSL "https://github.com/astral-sh/uv/releases/latest/download/uv-${uv_arch}-unknown-linux-gnu.tar.gz" \
+          | tar xz -C .bin --strip-components=1 || { echo "❌ uv download failed"; exit 1; }
+      fi
+      .bin/uv venv -q --python python3 .venv
+    fi
+    .bin/uv pip install -q --python .venv/bin/python -r app/requirements.txt || exit 1
+    .bin/uv pip install -q --python .venv/bin/python -r app/requirements-optional.txt \
       || echo "   (optional deps skipped)"
     # Shared VM: take any free port instead of assuming 8080 is ours.
     export PORT="${PORT:-$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')}"
     echo
     echo "== open http://localhost:$PORT in the VM's browser (Ctrl+C here stops the app)"
-    exec python3 main.py
+    cd app && exec ../.venv/bin/python main.py
     ;;
   warm)
     echo "== precomputing the demo inside the pod (takes a few minutes)"

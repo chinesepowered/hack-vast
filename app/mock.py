@@ -186,31 +186,45 @@ _SEG_CONCEPTS = {s["source"]: concepts(s["caption"]) for s in SEGMENTS}
 _SEG_OBJECTS = {s["source"]: concepts(" ".join(s["objects"])) for s in SEGMENTS}
 
 
+def _counts(seg: dict) -> dict[str, int]:
+    """Fake YOLO object_counts: a few people, more cars on roads, deterministic per clip."""
+    spread = {"car": 6, "person": 3, "truck": 3, "box": 5, "pallet": 3}
+    counts = {o: 1 + int(_unit(seg["source"], o) * spread.get(o, 1)) for o in seg["objects"]}
+    return dict(sorted(counts.items(), key=lambda kv: -kv[1]))
+
+
 def _hit(seg: dict, similarity: float) -> dict:
     hit = {k: seg[k] for k in ("source", "original_video", "filename", "camera_id", "location", "capture_type",
                                "start_sec", "end_sec", "segment_number", "caption", "objects")}
     hit["similarity"] = round(similarity, 4)
+    hit["object_counts"] = _counts(seg)
     hit["raw"] = {"mock": True, "source": seg["source"], "similarity_score": round(similarity, 4),
                   "segment_start_sec": seg["start_sec"], "segment_end_sec": seg["end_sec"],
                   "camera_id": seg["camera_id"], "location": seg["location"],
-                  "capture_type": seg["capture_type"], "object_classes": ",".join(seg["objects"])}
+                  "capture_type": seg["capture_type"], "object_classes": ",".join(seg["objects"]),
+                  "object_counts": json.dumps(hit["object_counts"])}
     return hit
 
 
-def search(query: str, top_k: int = 25, min_similarity: float = 0.3, location: str | None = None,
+SIM_SCALE = 0.42  # squeeze scores into the live index's range (its best hits score ~0.3)
+
+
+def search(query: str, top_k: int = 30, min_similarity: float = 0.12, location: str | None = None,
            hybrid_text_weight: float | None = None) -> list[dict]:
     """Concept-overlap "hybrid" search: caption overlap blended with detected-object overlap."""
     q = concepts(query)
     if not q:
         return []
     weight = 0.6 if hybrid_text_weight is None else max(0.0, min(1.0, float(hybrid_text_weight)))
+    # Long queries (a whole caption, for "more like this") shouldn't dilute the overlap score.
+    denom = min(len(q), 4 if len(q) >= 8 else 6)
     scored = []
     for seg in SEGMENTS:
         if location and seg["location"] != location:
             continue
-        text = 0.95 * (len(q & _SEG_CONCEPTS[seg["source"]]) / len(q)) ** 2
-        visual = 0.08 + 0.5 * len(q & _SEG_OBJECTS[seg["source"]]) / len(q)
-        score = weight * text + (1 - weight) * visual + (_unit(seg["source"], query) - 0.5) * 0.04
+        text = 0.95 * min(1.0, len(q & _SEG_CONCEPTS[seg["source"]]) / denom) ** 2
+        visual = 0.08 + 0.5 * min(1.0, len(q & _SEG_OBJECTS[seg["source"]]) / denom)
+        score = SIM_SCALE * (weight * text + (1 - weight) * visual + (_unit(seg["source"], query) - 0.5) * 0.04)
         if score >= min_similarity:
             scored.append((score, seg))
     scored.sort(key=lambda pair: -pair[0])

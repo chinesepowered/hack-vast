@@ -257,13 +257,18 @@ def main():
             out(f"   ❌ {summarize(data, 200)}")
             return
         model = os.environ.get("LLM_MODEL") or (nemotron[0] if nemotron else (ids[0] if ids else ""))
-        body = {"model": model, "max_tokens": 20, "temperature": 0,
-                "messages": [{"role": "user", "content": "Reply with the single word OK"}]}
+        # Same call shape as the app: Nemotron reasons by default, "/no_think" turns that off.
+        body = {"model": model, "max_tokens": 300, "temperature": 0,
+                "messages": [{"role": "system", "content": "/no_think"},
+                             {"role": "user", "content": 'Reply with JSON {"ok": true} and nothing else.'}]}
         status, data, _, dt = http("POST", f"{WANDB_INFERENCE_URL}/chat/completions",
                                    headers=headers, body=body, timeout=60)
         if status == 200 and isinstance(data, dict):
-            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            out(f"   ✅ chat with {model} in {dt:.1f}s: {summarize(text, 80)}")
+            msg = data.get("choices", [{}])[0].get("message", {})
+            out(f"   {'✅' if msg.get('content') else '⚠️ '} chat with {model} in {dt:.1f}s: "
+                f"content={summarize(msg.get('content'), 80)} "
+                f"reasoning={'yes' if msg.get('reasoning_content') or msg.get('reasoning') else 'no'} "
+                f"finish={data.get('choices', [{}])[0].get('finish_reason')}")
         else:
             out(f"   ❌ chat with {model} HTTP {status}: {summarize(data, 200)}")
 
