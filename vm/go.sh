@@ -23,6 +23,20 @@ case "$mode" in
   *) python3 vm/preflight.py ;;
 esac
 
+show_status() {  # show_status <url>: what the running app can reach (VSS, Cosmos, W&B)
+  sleep 5  # the app probes its integrations right after start
+  curl -s -m 30 "$1/api/config" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+mark = lambda ok: "✅" if ok else ("…" if ok is None else "❌")
+v, c, l = d.get("vss") or {}, d.get("cosmos") or {}, d.get("llm") or {}
+print("   VSS backend:    %s %s" % (mark(v.get("ok")), v.get("error") or ""))
+print("   Cosmos3-Reason: %s %s" % (mark(bool(c.get("model"))), c.get("model") or c.get("error") or ""))
+print("   W&B models:     %s %s / %s" % (mark(bool(l.get("model"))), l.get("model"), l.get("judge_model")))
+print("   Weave tracing:  %s   W&B Artifacts: %s" % (mark(d.get("weave")), mark(d.get("wandb"))))
+' 2>/dev/null || echo "   (could not read $1/api/config)"
+}
+
 wait_healthy() {  # wait_healthy <label> <url>: poll <url>/health for up to ~2 minutes
   local code=""
   echo "== waiting for $2/health"
@@ -86,7 +100,7 @@ case "$mode" in
       echo "❌ Kubernetes deploy failed. Fallback for the demo: bash vm/go.sh local"
       exit 1
     }
-    [[ -f .app-url ]] && wait_healthy "LIVE (event network)" "$(cat .app-url)"
+    [[ -f .app-url ]] && wait_healthy "LIVE (event network)" "$(cat .app-url)" && show_status "$(cat .app-url)"
     [[ -f .tunnel-url ]] && wait_healthy "PUBLIC (share this)" "$(cat .tunnel-url)"
     ;;
 esac

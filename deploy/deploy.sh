@@ -86,7 +86,41 @@ echo "== deploying $APP_NAME to namespace $NS (host $APP_HOST, code ${APP_BYTES}
 "$KUBECTL" -n "$NS" create configmap "${APP_NAME}-code" --from-file="$APP_DIR" --dry-run=client -o yaml \
   | "$KUBECTL" -n "$NS" apply --server-side --force-conflicts -f -
 
-# 2. Credentials -> Secret. Unset values become empty strings; the app degrades gracefully without them.
+# 2a. Where the pod reaches VSS. The VMs resolve the team host privately (pods can't), so use the
+#     Service behind the team's /api Ingress directly; also map the team host to the IP the VM
+#     resolves, as a fallback.
+VSS_FOR_POD="${INGRESS_URL:-}"
+backend="$("$KUBECTL" -n "$NS" get ingress -o json 2>/dev/null | python3 -c '
+import json, sys
+host, mine = sys.argv[1], sys.argv[2]
+for item in json.load(sys.stdin).get("items", []):
+    if item["metadata"]["name"] == mine:
+        continue
+    for rule in item.get("spec", {}).get("rules", []):
+        for p in rule.get("http", {}).get("paths", []):
+            svc = (p.get("backend") or {}).get("service") or {}
+            if rule.get("host") == host and (p.get("path") or "").startswith("/api") and svc.get("name"):
+                port = svc.get("port") or {}
+                print(svc["name"], port.get("number") or port.get("name") or "")
+                sys.exit()
+' "$APP_HOST" "$APP_NAME" || true)"
+if [[ -n "$backend" ]]; then
+  read -r b_svc b_port <<<"$backend"
+  if [[ -n "${b_port:-}" && ! "$b_port" =~ ^[0-9]+$ ]]; then
+    b_port="$("$KUBECTL" -n "$NS" get svc "$b_svc" -o jsonpath="{.spec.ports[?(@.name=='$b_port')].port}" 2>/dev/null || true)"
+  fi
+  [[ -n "${b_port:-}" ]] && VSS_FOR_POD="http://${b_svc}:${b_port}"
+fi
+HOST_IP="$(getent hosts "$APP_HOST" 2>/dev/null | awk '{print $1; exit}' || true)"
+HOST_ALIASES=""
+if [[ -n "$HOST_IP" ]]; then
+  HOST_ALIASES="      hostAliases:
+      - ip: \"${HOST_IP}\"
+        hostnames: [\"${APP_HOST}\"]"
+fi
+echo "== VSS backend as seen from the pod: ${VSS_FOR_POD}${HOST_IP:+ (team host mapped to $HOST_IP)}"
+
+# 2b. Credentials -> Secret. Unset values become empty strings; the app degrades gracefully without them.
 empty=()
 for var in INGRESS_URL USERNAME PASSWORD GPU_BEARER_TOKEN COSMOS3_REASON_URL COSMOS3_REASON_MODEL \
            WANDB_API_KEY WANDB_TEAM WANDB_PROJECT; do
@@ -101,7 +135,7 @@ ENV_FILE="$(mktemp)"
 chmod 600 "$ENV_FILE"
 trap 'rm -f "$ENV_FILE"' EXIT
 {
-  printf 'VSS_URL=%s\n' "${INGRESS_URL:-}"
+  printf 'VSS_URL=%s\n' "${VSS_FOR_POD}"
   printf 'VSS_USERNAME=%s\n' "${USERNAME:-}"
   printf 'VSS_PASSWORD=%s\n' "${PASSWORD:-}"
   printf 'GPU_BEARER_TOKEN=%s\n' "${GPU_BEARER_TOKEN:-}"
@@ -133,6 +167,7 @@ spec:
       labels:
         app: ${APP_NAME}
     spec:
+${HOST_ALIASES}
       containers:
       - name: app
         image: python:3.12-slim
