@@ -6,6 +6,7 @@
 #   bash vm/go.sh local    # fallback: run the app on this VM and open it in the VM's browser
 #   bash vm/go.sh warm     # precompute the demo (coverage grid + verdicts) inside the pod
 #   bash vm/go.sh url      # print the in-event and public (Cloudflare tunnel) links
+#   bash vm/go.sh ui       # push web-page-only changes (index.html) without restarting: keeps the warm cache
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -19,7 +20,7 @@ source vm/env.sh
 
 mode="${1:-deploy}"
 case "$mode" in
-  warm|url) ;;
+  warm|url|ui) ;;
   *) python3 vm/preflight.py ;;
 esac
 
@@ -76,6 +77,13 @@ case "$mode" in
   warm)
     echo "== precomputing the demo inside the pod (takes a few minutes)"
     "$KUBECTL" -n "$USERNAME" exec deploy/"$APP_NAME" -- python main.py --warm
+    ;;
+  ui)
+    # index.html is read on every request, so updating the code ConfigMap is enough; kubelet syncs the
+    # mounted file within about a minute. No restart, so the app's warm cache survives.
+    "$KUBECTL" -n "$USERNAME" create configmap "${APP_NAME}-code" --from-file=app --dry-run=client -o yaml \
+      | "$KUBECTL" -n "$USERNAME" apply --server-side --force-conflicts -f -
+    echo "== page updated in the cluster; it goes live within ~1 minute (no restart, cache kept)"
     ;;
   url)
     turl="$("$KUBECTL" -n "$USERNAME" logs deploy/"$APP_NAME-tunnel" 2>/dev/null \

@@ -729,7 +729,7 @@ async function moreLikeThis(i) {
     const res = await api('api/similar', { body: { scenario: v.scenario, source: c.source, top_k: opts.top_k, min_similarity: opts.min_similarity, hybrid_text_weight: opts.hybrid_text_weight, location: opts.location } });
     if (runId !== state.runSeq) return;
     if (v.kind === 'mine') state.prevView = v;
-    showView({ kind: 'similar', seed: c, ...res, scenario: v.scenario });
+    showView({ kind: 'similar', ...res, seed: c, scenario: v.scenario });  // res.seed is just the source URI
     window.scrollTo({ top: $('#similarBanner').offsetTop - 120, behavior: 'smooth' });
     autoVerify(state.view, runId);
   } catch (err) {
