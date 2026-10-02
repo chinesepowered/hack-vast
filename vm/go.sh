@@ -38,9 +38,10 @@ case "$mode" in
     kubectl -n "$USERNAME" exec deploy/"${APP_NAME:-edge-case-miner}" -- python main.py --warm
     ;;
   *)
-    if [[ ! -f deploy/deploy.sh ]]; then
+    # vm/READY is committed only once the app has been tested, so a half-built snapshot never deploys.
+    if [[ ! -f vm/READY || ! -f deploy/deploy.sh ]]; then
       echo
-      echo ">>> The app isn't pushed yet. Send the report above to Claude, then re-run this command later."
+      echo ">>> The app isn't ready yet. Send the report above to Claude, then re-run this command later."
       exit 0
     fi
     bash deploy/deploy.sh || {
