@@ -274,6 +274,28 @@ def main():
                 f"finish={data.get('choices', [{}])[0].get('finish_reason')}")
         else:
             out(f"   ❌ chat with {model} HTTP {status}: {summarize(data, 200)}")
+        # The app's real query-expansion call (thinking disabled both ways, as app/llm.py does it).
+        body = {"model": model, "max_tokens": 1500, "temperature": 0.3,
+                "chat_template_kwargs": {"enable_thinking": False},
+                "messages": [{"role": "system", "content": "/no_think\nYou write search queries for a video archive."},
+                             {"role": "user", "content": 'Edge-case scenario: "pedestrian stepping into the road in '
+                                                         'front of a moving vehicle"\nReturn ONLY JSON: '
+                                                         '{"queries": [4 different search queries]}.'}]}
+        status, data, _, dt = http("POST", f"{WANDB_INFERENCE_URL}/chat/completions",
+                                   headers=headers, body=body, timeout=90)
+        if status in (400, 422):
+            out(f"   (chat_template_kwargs rejected: HTTP {status}) retrying without it")
+            body.pop("chat_template_kwargs")
+            status, data, _, dt = http("POST", f"{WANDB_INFERENCE_URL}/chat/completions",
+                                       headers=headers, body=body, timeout=90)
+        if status == 200 and isinstance(data, dict):
+            choice = data.get("choices", [{}])[0]
+            msg = choice.get("message", {})
+            out(f"   {'✅' if msg.get('content') else '❌'} expansion with {model} in {dt:.1f}s: "
+                f"finish={choice.get('finish_reason')} content={summarize(msg.get('content'), 120)} "
+                f"reasoning={len(msg.get('reasoning_content') or msg.get('reasoning') or '')} chars")
+        else:
+            out(f"   ❌ expansion with {model} HTTP {status}: {summarize(data, 200)}")
 
     def kube():
         out(f"   /config contains: {sorted(os.listdir('/config')) if os.path.isdir('/config') else 'no /config'}")

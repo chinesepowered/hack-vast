@@ -129,7 +129,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"data": [{"id": "meta-llama/Llama-3.1-8B-Instruct"},
                                             {"id": "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B"},
                                             {"id": "deepseek-ai/DeepSeek-V4-Pro-0813"},
-                                            {"id": "Qwen/Qwen3.8-27B"}]})
+                                            {"id": "Qwen/Qwen3.8-27B"},
+                                            {"id": "Qwen/Qwen3-30B-A3B-Instruct-2507"}]})
         return self.send_json({"detail": "not found"}, 404)
 
     def do_POST(self):
@@ -169,6 +170,12 @@ class Handler(BaseHTTPRequestHandler):
                       + "\n```")
             return self.send_json({"choices": [{"message": {"role": "assistant", "content": answer}}]})
         if self.service == "wandb" and url.path in ("/chat/completions", "/v1/chat/completions"):
+            # Like the live Qwen 3.8: thinks until the budget runs out unless thinking is disabled
+            # (FAKE_QWEN_BROKEN=1: never answers, to exercise the app's backup model).
+            if "qwen3.8" in req.get("model", "").lower() and (
+                    os.environ.get("FAKE_QWEN_BROKEN") == "1" or "chat_template_kwargs" not in req):
+                return self.send_json({"choices": [{"finish_reason": "length", "message": {
+                    "role": "assistant", "content": None, "reasoning_content": "Okay, let me think..."}}]})
             prompt = json.dumps(req.get("messages", [])).lower()
             if "queries" in prompt:
                 content = json.dumps({"queries": ["a pedestrian walks into the street in front of a car",
@@ -188,9 +195,10 @@ def serve(service, port):
 
 if __name__ == "__main__":
     make_clip()
-    for name, port in (("vss", 9001), ("cosmos", 9002), ("wandb", 9003)):
+    ports = [int(p) for p in os.environ.get("FAKE_PORTS", "9001,9002,9003").split(",")]
+    for name, port in zip(("vss", "cosmos", "wandb"), ports):
         threading.Thread(target=serve, args=(name, port), daemon=True).start()
-    print("fake stack: VSS :9001  Cosmos :9002  W&B :9003", flush=True)
+    print(f"fake stack: VSS :{ports[0]}  Cosmos :{ports[1]}  W&B :{ports[2]}", flush=True)
     try:
         threading.Event().wait()
     except KeyboardInterrupt:

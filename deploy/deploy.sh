@@ -144,7 +144,9 @@ trap 'rm -f "$ENV_FILE"' EXIT
   printf 'WANDB_API_KEY=%s\n' "${WANDB_API_KEY:-}"
   printf 'WANDB_TEAM=%s\n' "${WANDB_TEAM:-}"
   printf 'WANDB_PROJECT=%s\n' "${WANDB_PROJECT:-}"
-  # The organizers describe the neighborhood camera as private: keep it out of a publicly tunnelled app.
+  # Serve only the organizers' corpus (other people upload their own footage to a shared team index),
+  # minus the neighborhood camera, which the organizers describe as private.
+  printf 'INCLUDE_CAMERAS=%s\n' "${INCLUDE_CAMERAS-i24_cam-1,pie_cam-3,sf_streets_cam-1,sf_streets_cam-2,sf_streets_cam-3,sf_streets_cam-4,sdg_warehouse_cam-2,smartspace_cam-1}"
   printf 'EXCLUDE_CAMERAS=%s\n' "${EXCLUDE_CAMERAS-neighborhood_cam-1}"
   printf 'EXCLUDE_LOCATIONS=%s\n' "${EXCLUDE_LOCATIONS-neighborhood}"
 } > "$ENV_FILE"

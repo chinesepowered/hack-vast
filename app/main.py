@@ -66,13 +66,20 @@ def env_int(name: str, default: int) -> int:
 MOCK = env("MOCK").lower() in ("1", "true", "yes", "on")
 PORT = env_int("PORT", 8080)
 MAX_VERIFY = max(1, env_int("MAX_VERIFY", 24))
-# Cameras / locations this deployment never serves (e.g. private footage behind a public link).
+# What this deployment serves. INCLUDE_CAMERAS (if set) is an allowlist, e.g. the organizers' corpus on a
+# shared team index where other people upload their own footage; the EXCLUDE_* lists always win
+# (e.g. private footage behind a public link).
+INCLUDE_CAMERAS = {v.strip() for v in env("INCLUDE_CAMERAS").split(",") if v.strip()}
 EXCLUDE_CAMERAS = {v.strip() for v in env("EXCLUDE_CAMERAS").split(",") if v.strip()}
 EXCLUDE_LOCATIONS = {v.strip() for v in env("EXCLUDE_LOCATIONS").split(",") if v.strip()}
 
 
 def excluded(hit: dict | None) -> bool:
-    return bool(hit) and (hit.get("camera_id") in EXCLUDE_CAMERAS or hit.get("location") in EXCLUDE_LOCATIONS)
+    if not hit:
+        return False
+    camera = hit.get("camera_id")
+    return (camera in EXCLUDE_CAMERAS or hit.get("location") in EXCLUDE_LOCATIONS
+            or bool(INCLUDE_CAMERAS) and camera not in INCLUDE_CAMERAS)
 VERIFY_CONCURRENCY = max(1, env_int("VERIFY_CONCURRENCY", 6))
 SEARCH_CACHE_TTL = env_int("SEARCH_CACHE_TTL", 6 * 3600)
 SEARCH_CONCURRENCY = 4  # the stock VSS backend runs 4 workers; leave room for the team's other users
@@ -485,6 +492,8 @@ async def known_locations(hits_by_scenario: dict | None = None) -> list[str]:
     values: list[str] = []
     if MOCK:
         values = mock.location_values()
+    elif INCLUDE_CAMERAS:
+        pass  # allowlisted cameras: columns come only from the footage this app serves (below)
     elif VSS.configured:
         if time.time() - _LOCATIONS_CACHE["at"] < 600:
             values = list(_LOCATIONS_CACHE["values"])

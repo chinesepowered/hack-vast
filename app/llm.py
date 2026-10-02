@@ -336,6 +336,10 @@ def pick_model(ids: list[str], prefs: tuple[str, ...] = MODEL_PREFS["expand"]) -
     return usable[0] if usable else None
 
 
+# Retried once when the preferred expansion model answers with nothing usable: models that don't think.
+BACKUP_PREFS = ("qwen3-30b-a3b-instruct", "deepseek-v4-flash", "deepseek-v4.1-flash", "llama-3.3-70b")
+
+
 def _hybrid_thinker(model_id: str) -> bool:
     """Models that think by default and honour a "/no_think" system-prompt switch."""
     return bool(re.search(r"nemotron|qwen3", model_id, re.I))
@@ -355,6 +359,7 @@ class LLMClient:
         # resolved from the live model list.
         self._models: dict[str, str | None] = {"expand": expand_model or model or None,
                                                "judge": judge_model or model or None}
+        self._ids: list[str] = []
         self._timeout = timeout
         self._client: httpx.AsyncClient | None = None
         self._lock: asyncio.Lock | None = None
@@ -414,31 +419,60 @@ class LLMClient:
             except Exception as exc:  # noqa: BLE001
                 self.last_error = f"model list failed ({type(exc).__name__})"
                 return None
+            self._ids = ids
             for job, prefs in MODEL_PREFS.items():
                 self._models[job] = self._models.get(job) or pick_model(ids, prefs)
             self.last_error = None if self._models.get(role) else "no models available"
             return self._models.get(role)
 
     async def chat(self, messages: list[dict], max_tokens: int = 600, temperature: float = 0.2,
-                   role: str = "expand") -> str:
-        model = await self.model(role)
+                   role: str = "expand", model: str | None = None) -> str:
+        model = model or await self.model(role)
         if not model:
             raise LLMError(self.last_error or "LLM not configured")
-        if _hybrid_thinker(model) and messages and messages[0].get("role") == "system":
-            # Qwen3 / Nemotron think by default: skip the long <think> phase.
-            messages = [{"role": "system", "content": "/no_think\n" + messages[0]["content"]}] + messages[1:]
-        body = {"model": model, "messages": messages, "max_tokens": max_tokens, "temperature": temperature}
-        try:
-            resp = await self._http().post(f"{self.base}/chat/completions", json=body, headers=self._headers())
-        except httpx.HTTPError as exc:
-            raise LLMError(f"LLM request failed ({type(exc).__name__})") from None
+        body: dict[str, Any] = {"model": model, "max_tokens": max_tokens, "temperature": temperature}
+        if _hybrid_thinker(model):
+            # Qwen3 / Nemotron think by default, which can eat the whole budget before any answer:
+            # turn it off both ways ("/no_think" switch and the vLLM chat-template flag).
+            if messages and messages[0].get("role") == "system":
+                messages = [{"role": "system", "content": "/no_think\n" + messages[0]["content"]}] + messages[1:]
+            body["chat_template_kwargs"] = {"enable_thinking": False}
+        body["messages"] = messages
+        resp = await self._post_chat(body)
+        if resp.status_code in (400, 422) and "chat_template_kwargs" in body:
+            body.pop("chat_template_kwargs")  # a server that rejects the flag: rely on "/no_think"
+            resp = await self._post_chat(body)
         if resp.status_code != 200:
             raise LLMError(f"LLM HTTP {resp.status_code}: {_clip(resp.text, 160)}")
         try:
-            message = resp.json()["choices"][0]["message"]
+            choice = resp.json()["choices"][0]
+            message = choice["message"]
         except Exception:  # noqa: BLE001
             raise LLMError("LLM returned an unexpected response shape") from None
-        return (message.get("content") or message.get("reasoning_content") or "").strip()
+        content = (message.get("content") or "").strip()
+        reasoning = (message.get("reasoning_content") or message.get("reasoning") or "").strip()
+        log.info("llm %s: finish=%s content=%d chars reasoning=%d chars", model, choice.get("finish_reason"),
+                 len(content), len(reasoning))
+        if not content:
+            # Thinking is not an answer (it would parse as junk queries): let the caller fall back.
+            raise LLMError(f"{model} gave no answer (finish={choice.get('finish_reason')}, "
+                           f"{len(reasoning)} chars of reasoning)")
+        return content
+
+    async def _post_chat(self, body: dict) -> httpx.Response:
+        try:
+            return await self._http().post(f"{self.base}/chat/completions", json=body, headers=self._headers())
+        except httpx.HTTPError as exc:
+            raise LLMError(f"LLM request failed ({type(exc).__name__})") from None
+
+    def backup_model(self, role: str) -> str | None:
+        """A non-thinking model to retry with when the preferred one returns nothing usable."""
+        current = self._models.get(role)
+        for pref in BACKUP_PREFS:
+            for model_id in self._ids:
+                if pref in model_id.lower() and model_id != current:
+                    return model_id
+        return None
 
     async def expand_queries(self, scenario: str, n: int = 4) -> dict:
         """Scenario → n caption-style search queries. Falls back to templates on any failure."""
@@ -448,16 +482,18 @@ class LLMClient:
                       f'Return ONLY JSON: {{"queries": [{n} different search queries]}}. '
                       "Cover different phrasings and viewpoints (dashcam, street camera, overhead, indoor) "
                       "where they make sense.")
-            try:
-                text = await self.chat([{"role": "system", "content": EXPAND_SYSTEM},
-                                        {"role": "user", "content": prompt}], max_tokens=700, temperature=0.3,
-                                       role="expand")
-                queries = _clean_queries(_queries_from_text(text), n)
-                if queries:
-                    return {"queries": queries, "model": self.model_name, "fallback": False}
-                error = "LLM reply contained no queries"
-            except LLMError as exc:
-                error = str(exc)
+            messages = [{"role": "system", "content": EXPAND_SYSTEM}, {"role": "user", "content": prompt}]
+            await self.model("expand")
+            for model in dict.fromkeys(m for m in (self.model_name, self.backup_model("expand")) if m):
+                try:
+                    text = await self.chat(messages, max_tokens=1500, temperature=0.3, model=model)
+                    queries = _clean_queries(_queries_from_text(text), n)
+                    if queries:
+                        return {"queries": queries, "model": model, "fallback": False}
+                    error = f"{model} reply contained no queries"
+                except LLMError as exc:
+                    error = str(exc)
+                log.info("query expansion: %s", error)
         return {"queries": fallback_queries(scenario), "model": None, "fallback": True, "error": error}
 
     async def judge_caption(self, scenario: str, caption: str) -> dict:
