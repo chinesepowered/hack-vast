@@ -483,7 +483,19 @@ class VSSClient:
         raise VSSError("clip stream unauthorized", 502)
 
     async def download_clip(self, source: str, max_bytes: int = MAX_CLIP_BYTES) -> bytes:
-        """Fetch a segment's bytes server-side via /videos/stream (capped at ``max_bytes``)."""
+        """Fetch a segment's bytes server-side via /videos/stream (capped at ``max_bytes``), retrying
+        transient connection failures."""
+        for delay in (*RETRY_DELAYS, None):
+            try:
+                return await self._download_once(source, max_bytes)
+            except TRANSIENT as exc:
+                if delay is None:
+                    raise VSSError(f"clip download failed ({type(exc).__name__})", 502) from None
+                log.info("clip download: %s, retrying in %.1fs", type(exc).__name__, delay)
+                await asyncio.sleep(delay)
+        raise AssertionError("unreachable")
+
+    async def _download_once(self, source: str, max_bytes: int) -> bytes:
         token = await self.login()
         for attempt in (0, 1):
             try:
@@ -503,6 +515,8 @@ class VSSClient:
                         if len(buf) > max_bytes:
                             raise VSSError(f"clip larger than {max_bytes // 1048576} MB", 413)
                     return bytes(buf)
+            except TRANSIENT:
+                raise
             except httpx.TimeoutException:
                 raise VSSError("clip download timed out", 504) from None
             except httpx.HTTPError as exc:

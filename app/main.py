@@ -80,7 +80,7 @@ def excluded(hit: dict | None) -> bool:
     camera = hit.get("camera_id")
     return (camera in EXCLUDE_CAMERAS or hit.get("location") in EXCLUDE_LOCATIONS
             or bool(INCLUDE_CAMERAS) and camera not in INCLUDE_CAMERAS)
-VERIFY_CONCURRENCY = max(1, env_int("VERIFY_CONCURRENCY", 6))
+VERIFY_CONCURRENCY = max(1, env_int("VERIFY_CONCURRENCY", 3))  # clip downloads hit the shared backend
 SEARCH_CACHE_TTL = env_int("SEARCH_CACHE_TTL", 6 * 3600)
 SEARCH_CONCURRENCY = 4  # the stock VSS backend runs 4 workers; leave room for the team's other users
 # Hybrid similarity on the live index is low (the best hit for a clear query scores ~0.3), so search

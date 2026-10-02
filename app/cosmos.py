@@ -327,7 +327,9 @@ class Verifier:
                 verdict = {"match": None, "confidence": None, "why": f"verification error ({type(exc).__name__})",
                            "method": "error"}
             verdict.setdefault("ms", int((time.perf_counter() - t0) * 1000))
-        if verdict.get("match") is not None:
+        # Cache real verdicts only: a caption-judge fallback caused by a transient Cosmos/clip failure
+        # must not stick, so the next request gets Cosmos to watch the clip after all.
+        if verdict.get("match") is not None and "Cosmos3-Reason unavailable" not in (verdict.get("note") or ""):
             self.cache.put(source, scenario, verdict,
                            {"location": hit.get("location"), "camera_id": hit.get("camera_id")})
         return public_verdict(verdict)
