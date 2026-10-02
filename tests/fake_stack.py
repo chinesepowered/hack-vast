@@ -17,12 +17,12 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-CLIP = os.path.join(HERE, ".fake_clip.mp4")
+CLIP = os.environ.get("FAKE_CLIP", os.path.join(tempfile.gettempdir(), "ecm_fake_clip.mp4"))
 TOKEN = "fake-jwt"
 
 SEGMENTS = [
