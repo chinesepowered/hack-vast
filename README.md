@@ -67,6 +67,7 @@ bash vm/go.sh warm     # precompute the coverage grid and demo verdicts inside t
 | `WANDB_API_KEY`, `WANDB_TEAM` (or `WANDB_ENTITY`), `WANDB_PROJECT`, `WANDB_INFERENCE_URL` | LLM, Weave, Artifacts |
 | `LLM_EXPAND_MODEL`, `LLM_JUDGE_MODEL` (or `LLM_MODEL` for both) | pin W&B models; default: Qwen 3.8 / DeepSeek V4 from the live model list |
 | `MOCK`, `CACHE_DIR`, `MAX_VERIFY`, `VERIFY_CONCURRENCY`, `PORT` | app behaviour |
+| `EXCLUDE_CAMERAS`, `EXCLUDE_LOCATIONS` | never search, show or relay these (deploy.sh default: the private neighborhood camera, since the app has a public link) |
 
 Missing integrations degrade instead of failing: no Cosmos means caption judging, no W&B means template query expansion and a manifest-only export. Hybrid similarity on the live index runs low (a strong hit scores about 0.3), so searches default to `min_similarity` 0.12 and 30 candidates and let verification do the filtering; the coverage grid counts hits at 0.2 or above.
 

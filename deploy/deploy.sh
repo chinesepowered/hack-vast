@@ -144,6 +144,9 @@ trap 'rm -f "$ENV_FILE"' EXIT
   printf 'WANDB_API_KEY=%s\n' "${WANDB_API_KEY:-}"
   printf 'WANDB_TEAM=%s\n' "${WANDB_TEAM:-}"
   printf 'WANDB_PROJECT=%s\n' "${WANDB_PROJECT:-}"
+  # The organizers describe the neighborhood camera as private: keep it out of a publicly tunnelled app.
+  printf 'EXCLUDE_CAMERAS=%s\n' "${EXCLUDE_CAMERAS-neighborhood_cam-1}"
+  printf 'EXCLUDE_LOCATIONS=%s\n' "${EXCLUDE_LOCATIONS-neighborhood}"
 } > "$ENV_FILE"
 "$KUBECTL" -n "$NS" create secret generic "${APP_NAME}-env" --from-env-file="$ENV_FILE" \
   --dry-run=client -o yaml \

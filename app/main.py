@@ -66,6 +66,13 @@ def env_int(name: str, default: int) -> int:
 MOCK = env("MOCK").lower() in ("1", "true", "yes", "on")
 PORT = env_int("PORT", 8080)
 MAX_VERIFY = max(1, env_int("MAX_VERIFY", 24))
+# Cameras / locations this deployment never serves (e.g. private footage behind a public link).
+EXCLUDE_CAMERAS = {v.strip() for v in env("EXCLUDE_CAMERAS").split(",") if v.strip()}
+EXCLUDE_LOCATIONS = {v.strip() for v in env("EXCLUDE_LOCATIONS").split(",") if v.strip()}
+
+
+def excluded(hit: dict | None) -> bool:
+    return bool(hit) and (hit.get("camera_id") in EXCLUDE_CAMERAS or hit.get("location") in EXCLUDE_LOCATIONS)
 VERIFY_CONCURRENCY = max(1, env_int("VERIFY_CONCURRENCY", 6))
 SEARCH_CACHE_TTL = env_int("SEARCH_CACHE_TTL", 6 * 3600)
 SEARCH_CONCURRENCY = 4  # the stock VSS backend runs 4 workers; leave room for the team's other users
@@ -286,6 +293,7 @@ async def search(query: str, top_k: int = DEFAULT_TOP_K, min_similarity: float =
                 hits, _meta = await VSS.search(query, top_k, min_similarity,
                                                {"location": location} if location else None, hybrid_text_weight)
             SEARCH_CACHE.put(key, hits)
+    hits = [hit for hit in hits if not excluded(hit)]
     for hit in hits:
         remember(hit)
     return hits
@@ -491,6 +499,7 @@ async def known_locations(hits_by_scenario: dict | None = None) -> list[str]:
             loc = hit.get("location") or UNKNOWN
             if loc not in values:
                 values.append(loc)
+    values = [v for v in values if v not in EXCLUDE_LOCATIONS]
     return sorted(set(values), key=lambda v: (v == UNKNOWN, v.lower()))
 
 
@@ -810,7 +819,8 @@ async def api_clip(source: str, request: Request) -> StreamingResponse:
         raise AppError(404, "No footage in mock mode")
     require_vss()
     # Only clips this app has surfaced (or VSS knows): not an open proxy into the bucket.
-    if not source.startswith("s3://") or not await lookup(source):
+    hit = await lookup(source) if source.startswith("s3://") else None
+    if not hit or excluded(hit):
         raise AppError(404, "Unknown clip")
     upstream = await VSS.open_stream(source, request.headers.get("range"))
     if upstream.status_code not in (200, 206):
